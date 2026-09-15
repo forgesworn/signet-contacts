@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { createSignetContactsClient, createMemoryStorage } from './client.js';
 import type { ContactsSigner, RelayIo } from './client.js';
 import { buildPairingAckV2, ackEventTemplate } from './wire/ack.js';
+import { sealVaultPayload } from './wire/envelope.js';
 import { buildProjection, projectionEventTemplate } from './wire/projection.js';
 import { parseProposalBatch } from './wire/proposal.js';
 import { projectionTag, proposalTag } from './wire/ids.js';
@@ -14,15 +15,34 @@ const RAIL = 'b'.repeat(64);
 const CHALLENGE = 'D'.repeat(32);
 const RELAYS = ['wss://relay.example.com'];
 
-/** A fake signer: "encryption" is a reversible tagged wrapper, so a test can
- *  assert who a payload was addressed to without a crypto dependency. */
+/** Mirrors client.ts's own (unexported) `STATE_KEY_PREFIX`/`PENDING_KEY_PREFIX`
+ *  — white-box, needed only by the `load()` row-validation tests, which seed
+ *  a specific stored SHAPE directly rather than round-tripping through a full
+ *  `propose`/`fetchProjection` cycle. */
+const STATE_KEY = (grantId: string) => `signet-contacts:state:${grantId}`;
+const PENDING_KEY = (grantId: string) => `signet-contacts:pending:${grantId}`;
+
+/**
+ * A fake signer: "encryption" is a reversible tagged wrapper, so a test can
+ * assert who a payload was addressed to without a crypto dependency.
+ *
+ * Fix round 1 (the "sealed to a different app pubkey" test below): the check
+ * is a STRICT `o.to === pubkey`, not the earlier `o.to === pubkey || o.to ===
+ * peer`. The `peer` branch was pure leniency left over from convenience test
+ * fixtures that never actually needed it (every fixture here already
+ * addresses payloads "to APP", the same identity that decrypts them) — but it
+ * made the fake open ANYTHING addressed to whatever `peer` argument the
+ * caller happened to pass, including a wrong-recipient envelope sealed "to
+ * the rail" by mistake, which is exactly the mistake the new test needs the
+ * fake to catch rather than spuriously accept.
+ */
 function fakeSigner(pubkey = APP): ContactsSigner {
   return {
     pubkey,
     async nip44Encrypt(peer, plaintext) { return JSON.stringify({ to: peer, plaintext }); },
-    async nip44Decrypt(peer, ciphertext) {
+    async nip44Decrypt(_peer, ciphertext) {
       const o = JSON.parse(ciphertext) as { to: string; plaintext: string };
-      if (o.to !== pubkey && o.to !== peer) throw new Error('wrong recipient');
+      if (o.to !== pubkey) throw new Error('wrong recipient');
       return o.plaintext;
     },
     async signEvent(event) { return { ...event, id: '0'.repeat(64), sig: '1'.repeat(128) }; },
@@ -31,6 +51,15 @@ function fakeSigner(pubkey = APP): ContactsSigner {
 
 function signed(template: ReturnType<typeof projectionEventTemplate>): SignedNostrEvent {
   return { ...template, id: '2'.repeat(64), sig: '3'.repeat(128) };
+}
+
+/** Seal a projection the way the app really publishes one (ruling R-4): a v2
+ *  vault envelope, content key wrapped to the APP's own pubkey (the only
+ *  identity this SDK's fake signer will ever open for). */
+async function sealProjection(signer: ContactsSigner, proj: ContactProjectionV2, recipient = APP): Promise<string> {
+  const sealed = await sealVaultPayload(buildProjection(proj), signer, recipient);
+  if (sealed === null) throw new Error('test setup: sealVaultPayload returned null');
+  return sealed;
 }
 
 const PAIRING: PairingV2 = {
@@ -173,12 +202,33 @@ describe('awaitPairingAck', () => {
     const pairing = await client.awaitPairingAck({ challenge: CHALLENGE, relays: RELAYS, timeoutMs: 30, pollMs: 10 });
     expect(pairing).toBeNull();
   });
+
+  // Fix round 1, M4.
+  it('rejects an ack whose railPubkey is the app’s own pubkey', async () => {
+    const signer = fakeSigner();
+    const content = await signer.nip44Encrypt(APP, buildPairingAckV2({
+      v: 2, grantId: GRANT, railPubkey: APP, projectionTag: projectionTag(GRANT),
+      proposalTag: proposalTag(GRANT, APP), relay: RELAYS[0]!,
+      grantedCapabilities: ['signet.contacts.read:directory'], maxStalenessSeconds: 21600,
+      challenge: CHALLENGE,
+    }));
+    const client = createSignetContactsClient({
+      signer,
+      relay: {
+        fetchNewest: async () => ({ ...ackEventTemplate('9'.repeat(64), APP, 1_700_000_000, content), id: '4'.repeat(64), sig: '5'.repeat(128) }),
+        publish: async () => true,
+      },
+      now: () => 1_700_000_000,
+    });
+    const pairing = await client.awaitPairingAck({ challenge: CHALLENGE, relays: RELAYS, timeoutMs: 30, pollMs: 10 });
+    expect(pairing).toBeNull();
+  });
 });
 
 describe('fetchProjection', () => {
-  it('decrypts, applies and exposes state', async () => {
+  it('opens the sealed envelope, applies and exposes state', async () => {
     const signer = fakeSigner();
-    const content = await signer.nip44Encrypt(APP, buildProjection(projection()));
+    const content = await sealProjection(signer, projection());
     const client = createSignetContactsClient({
       signer,
       relay: {
@@ -195,7 +245,7 @@ describe('fetchProjection', () => {
 
   it('pins the rail author: an event from another key is ignored', async () => {
     const signer = fakeSigner();
-    const content = await signer.nip44Encrypt(APP, buildProjection(projection()));
+    const content = await sealProjection(signer, projection());
     const imposter = { ...signed(projectionEventTemplate(RAIL, GRANT, 1, content)), pubkey: '7'.repeat(64) };
     const client = createSignetContactsClient({
       signer, relay: { fetchNewest: async () => imposter, publish: async () => true },
@@ -205,7 +255,7 @@ describe('fetchProjection', () => {
 
   it('ignores a projection whose grantId is not this pairing’s', async () => {
     const signer = fakeSigner();
-    const content = await signer.nip44Encrypt(APP, buildProjection(projection({ grantId: '0'.repeat(32) })));
+    const content = await sealProjection(signer, projection({ grantId: '0'.repeat(32) }));
     const client = createSignetContactsClient({
       signer,
       relay: { fetchNewest: async () => signed(projectionEventTemplate(RAIL, GRANT, 1, content)), publish: async () => true },
@@ -215,7 +265,7 @@ describe('fetchProjection', () => {
 
   it('fires onRevoked once when a revocation lands', async () => {
     const signer = fakeSigner();
-    const content = await signer.nip44Encrypt(APP, buildProjection(projection({ contacts: [], revoked: true })));
+    const content = await sealProjection(signer, projection({ contacts: [], revoked: true }));
     const onRevoked = vi.fn();
     const client = createSignetContactsClient({
       signer,
@@ -231,7 +281,7 @@ describe('fetchProjection', () => {
   it('persists and reloads state through injected storage', async () => {
     const storage = createMemoryStorage();
     const signer = fakeSigner();
-    const content = await signer.nip44Encrypt(APP, buildProjection(projection()));
+    const content = await sealProjection(signer, projection());
     const relay: RelayIo = {
       fetchNewest: async () => signed(projectionEventTemplate(RAIL, GRANT, 1, content)),
       publish: async () => true,
@@ -250,7 +300,7 @@ describe('fetchProjection', () => {
   it('rejects a projection whose staleness window exceeds the grant’s clamp', async () => {
     const signer = fakeSigner();
     const tooWide = projection({ issuedAt: 1_700_000_000, expiresAt: 1_700_000_000 + PAIRING.maxStalenessSeconds + 1 });
-    const content = await signer.nip44Encrypt(APP, buildProjection(tooWide));
+    const content = await sealProjection(signer, tooWide);
     const client = createSignetContactsClient({
       signer,
       relay: { fetchNewest: async () => signed(projectionEventTemplate(RAIL, GRANT, 1, content)), publish: async () => true },
@@ -266,6 +316,138 @@ describe('fetchProjection', () => {
       relay: { fetchNewest: async () => ({ pubkey: 12345 } as unknown as SignedNostrEvent), publish: async () => true },
     });
     await expect(client.fetchProjection(PAIRING)).resolves.toBeNull();
+  });
+
+  // Fix round 1, C2 (ruling R-4).
+  it('resolves null for a bare NIP-44 payload — the app never publishes one for this wire', async () => {
+    const signer = fakeSigner();
+    // The OLD (pre-fix) shape: no envelope, just `nip44Encrypt` directly.
+    const bare = await signer.nip44Encrypt(APP, buildProjection(projection()));
+    const client = createSignetContactsClient({
+      signer,
+      relay: { fetchNewest: async () => signed(projectionEventTemplate(RAIL, GRANT, 1, bare)), publish: async () => true },
+    });
+    expect(await client.fetchProjection(PAIRING)).toBeNull();
+  });
+
+  it('resolves null for a projection sealed to a DIFFERENT app pubkey', async () => {
+    const signer = fakeSigner();
+    // Sealed to some other pubkey, not this client's own signer — a producer
+    // (or relay) mistake, not this app's projection to open.
+    const content = await sealProjection(signer, projection(), 'e'.repeat(64));
+    const client = createSignetContactsClient({
+      signer,
+      relay: { fetchNewest: async () => signed(projectionEventTemplate(RAIL, GRANT, 1, content)), publish: async () => true },
+    });
+    expect(await client.fetchProjection(PAIRING)).toBeNull();
+  });
+
+  it('resolves null for a tampered envelope', async () => {
+    const signer = fakeSigner();
+    const content = await sealProjection(signer, projection());
+    const envelope = JSON.parse(content) as { ct: string };
+    const bytes = Uint8Array.from(atob(envelope.ct), (c) => c.charCodeAt(0));
+    bytes[0] = (bytes[0] ?? 0) ^ 0x01;
+    let binary = '';
+    for (const byte of bytes) binary += String.fromCharCode(byte);
+    const tampered = JSON.stringify({ ...envelope, ct: btoa(binary) });
+    const client = createSignetContactsClient({
+      signer,
+      relay: { fetchNewest: async () => signed(projectionEventTemplate(RAIL, GRANT, 1, tampered)), publish: async () => true },
+    });
+    expect(await client.fetchProjection(PAIRING)).toBeNull();
+  });
+
+  // Fix round 1, I1: the frontier rule in `applyProjection` rejects an older
+  // or duplicate snapshot by returning the SAME state object back — the
+  // caller must see that as "nothing new", not as a projection it can use.
+  it('returns null for an older replay and leaves state untouched', async () => {
+    const signer = fakeSigner();
+    const newer = projection({ frontier: { maxClock: 5, opCount: 10, publishedAt: 1_700_000_000, deviceId: '2'.repeat(32) } });
+    const older = projection({ frontier: { maxClock: 1, opCount: 1, publishedAt: 1_699_999_000, deviceId: '2'.repeat(32) } });
+    let contentToServe = await sealProjection(signer, newer);
+    const client = createSignetContactsClient({
+      signer,
+      relay: { fetchNewest: async () => signed(projectionEventTemplate(RAIL, GRANT, 1, contentToServe)), publish: async () => true },
+    });
+    const first = await client.fetchProjection(PAIRING);
+    expect(first?.frontier.maxClock).toBe(5);
+    contentToServe = await sealProjection(signer, older);
+    const replay = await client.fetchProjection(PAIRING);
+    expect(replay).toBeNull();
+    expect(client.getState().projection?.frontier.maxClock).toBe(5);
+  });
+
+  // Fix round 1, M3.
+  it('resolves null for a projection whose scopes exceed the grant’s capabilities', async () => {
+    const signer = fakeSigner();
+    const overScoped = projection({
+      scopes: ['signet.contacts.read:directory', 'signet.contacts.blocks.read'],
+    });
+    const content = await sealProjection(signer, overScoped);
+    const client = createSignetContactsClient({
+      signer,
+      // PAIRING only grants `signet.contacts.read:directory`.
+      relay: { fetchNewest: async () => signed(projectionEventTemplate(RAIL, GRANT, 1, content)), publish: async () => true },
+    });
+    expect(await client.fetchProjection(PAIRING)).toBeNull();
+    expect(client.getState().grantId).toBeNull();
+  });
+});
+
+// Fix round 1, I2: a stored row is outside this client's control (shared with
+// the rest of the app, editable by devtools, subject to partial writes) —
+// `load()` must not trust it any further than a wire value.
+describe('load — stored-row validation (I2)', () => {
+  it('drops a malformed pending row rather than keeping it', async () => {
+    const storage = createMemoryStorage();
+    await storage.set(PENDING_KEY(GRANT), JSON.stringify([
+      // Bad operationId (not 32-hex).
+      { operationId: 'not-hex', action: 'add-ken', value: { pubkey: 'd'.repeat(64), displayName: 'Ada' }, sentAt: 1 },
+      // Bad value shape for its action — would throw in `reconcilePending`'s
+      // `.pubkey.toLowerCase()` on every future `fetchProjection` if kept.
+      { operationId: 'a'.repeat(32), action: 'add-ken', value: { pubkey: 'not-hex', displayName: 'Ada' }, sentAt: 1 },
+      // Unknown action.
+      { operationId: 'c'.repeat(32), action: 'delete-everything', value: {}, sentAt: 1 },
+      // Well-formed — the one row that should survive.
+      { operationId: 'b'.repeat(32), action: 'add-ken', value: { pubkey: 'd'.repeat(64), displayName: 'Ada' }, sentAt: 1 },
+    ]));
+    const client = createSignetContactsClient({
+      signer: fakeSigner(), relay: { fetchNewest: async () => null, publish: async () => true }, storage,
+    });
+    await client.load(GRANT);
+    const pending = client.pendingProposals();
+    expect(pending).toHaveLength(1);
+    expect(pending[0]?.operationId).toBe('b'.repeat(32));
+  });
+
+  it('drops a corrupt stored projection without wedging a later fetchProjection, keeping blockedPubkeys', async () => {
+    const storage = createMemoryStorage();
+    await storage.set(STATE_KEY(GRANT), JSON.stringify({
+      grantId: GRANT,
+      // Missing frontier/scopes/contacts/etc — would throw inside
+      // `applyProjection`'s frontier comparison on every future fetch if a
+      // future `fetchProjection` ever compared against it directly.
+      projection: { v: 2, grantId: GRANT },
+      receivedAt: 1,
+      blockedPubkeys: ['d'.repeat(64)],
+      revoked: false,
+    }));
+    const signer = fakeSigner();
+    const content = await sealProjection(signer, projection());
+    const client = createSignetContactsClient({
+      signer,
+      relay: { fetchNewest: async () => signed(projectionEventTemplate(RAIL, GRANT, 1, content)), publish: async () => true },
+      storage,
+    });
+    const loaded = await client.load(GRANT);
+    expect(loaded.projection).toBeNull();
+    // Sticky Blocked set survives even though the projection it came from did not.
+    expect(client.getBlockedSet().has('d'.repeat(64))).toBe(true);
+    // A corrupt stored projection must not wedge every later fetchProjection —
+    // this grant's first REAL projection applies exactly as if it were new.
+    const p = await client.fetchProjection(PAIRING);
+    expect(p?.contacts).toHaveLength(1);
   });
 });
 
@@ -341,6 +523,47 @@ describe('propose', () => {
     const value = batch?.proposals[0]?.value as { updatedAt: number };
     expect(value.updatedAt).toBe(1_700_000_500_123);
   });
+
+  // Fix round 1, I3.
+  it('resolves false, never throws, when the signer’s nip44Encrypt rejects', async () => {
+    const signer = fakeSigner();
+    const throwingSigner: ContactsSigner = { ...signer, nip44Encrypt: async () => { throw new Error('bunker offline'); } };
+    const publish = vi.fn(async () => true);
+    const client = createSignetContactsClient({
+      signer: throwingSigner, relay: { fetchNewest: async () => null, publish },
+    });
+    const ADD_KEN = { ...PAIRING, grantedCapabilities: ['signet.contacts.read:directory', 'signet.contacts.propose:add-ken'] as const };
+    await expect(client.propose(ADD_KEN, [
+      { action: 'add-ken', value: { pubkey: 'c'.repeat(64), displayName: 'Ada' } },
+    ])).resolves.toBe(false);
+    expect(publish).not.toHaveBeenCalled();
+    expect(client.pendingProposals()).toEqual([]);
+  });
+
+  it('resolves false, never throws, when signEvent rejects', async () => {
+    const signer = fakeSigner();
+    const throwingSigner: ContactsSigner = { ...signer, signEvent: async () => { throw new Error('user declined'); } };
+    const client = createSignetContactsClient({
+      signer: throwingSigner, relay: { fetchNewest: async () => null, publish: async () => true },
+    });
+    const ADD_KEN = { ...PAIRING, grantedCapabilities: ['signet.contacts.read:directory', 'signet.contacts.propose:add-ken'] as const };
+    await expect(client.propose(ADD_KEN, [
+      { action: 'add-ken', value: { pubkey: 'c'.repeat(64), displayName: 'Ada' } },
+    ])).resolves.toBe(false);
+    expect(client.pendingProposals()).toEqual([]);
+  });
+
+  it('resolves false, never throws, when the relay’s publish rejects', async () => {
+    const client = createSignetContactsClient({
+      signer: fakeSigner(),
+      relay: { fetchNewest: async () => null, publish: async () => { throw new Error('socket closed'); } },
+    });
+    const ADD_KEN = { ...PAIRING, grantedCapabilities: ['signet.contacts.read:directory', 'signet.contacts.propose:add-ken'] as const };
+    await expect(client.propose(ADD_KEN, [
+      { action: 'add-ken', value: { pubkey: 'c'.repeat(64), displayName: 'Ada' } },
+    ])).resolves.toBe(false);
+    expect(client.pendingProposals()).toEqual([]);
+  });
 });
 
 describe('pendingProposals (R-9)', () => {
@@ -373,7 +596,7 @@ describe('pendingProposals (R-9)', () => {
 
   it('clears an add-ken once a projection carries that pubkey', async () => {
     const signer = fakeSigner();
-    const content = await signer.nip44Encrypt(APP, buildProjection(projection()));
+    const content = await sealProjection(signer, projection());
     const client = createSignetContactsClient({
       signer,
       relay: {
@@ -391,7 +614,7 @@ describe('pendingProposals (R-9)', () => {
   it('gives up on a proposal older than the staleness window', async () => {
     let clock = 1_700_000_500;
     const signer = fakeSigner();
-    const content = await signer.nip44Encrypt(APP, buildProjection(projection({ contacts: [] })));
+    const content = await sealProjection(signer, projection({ contacts: [] }));
     const client = createSignetContactsClient({
       signer,
       relay: {
@@ -405,5 +628,44 @@ describe('pendingProposals (R-9)', () => {
     clock += 101;
     await client.fetchProjection(PAIRING);
     expect(client.pendingProposals()).toEqual([]);
+  });
+
+  // Fix round 1, M1: keyed off `pairing.grantId`, not `state.grantId` (which
+  // stays null until the first successful `fetchProjection`).
+  it('persists a proposal sent BEFORE any projection has ever been fetched', async () => {
+    const storage = createMemoryStorage();
+    const signer = fakeSigner();
+    const first = createSignetContactsClient({
+      signer, storage,
+      relay: { fetchNewest: async () => null, publish: async () => true },
+      now: () => 1_700_000_500,
+    });
+    // No fetchProjection call at all — `state.grantId` is still null here.
+    const ok = await first.propose(ADD_PAIRING, [{ action: 'add-ken', value: { pubkey: 'd'.repeat(64), displayName: 'Ada' } }]);
+    expect(ok).toBe(true);
+
+    const second = createSignetContactsClient({
+      signer, storage, relay: { fetchNewest: async () => null, publish: async () => true },
+    });
+    const loaded = await second.load(GRANT);
+    expect(loaded).toBeDefined();
+    expect(second.pendingProposals()).toHaveLength(1);
+    expect(second.pendingProposals()[0]?.action).toBe('add-ken');
+  });
+
+  // Fix round 1, M2.
+  it('returns a deep copy: mutating a returned entry cannot corrupt internal state', async () => {
+    const client = createSignetContactsClient({
+      signer: fakeSigner(),
+      relay: { fetchNewest: async () => null, publish: async () => true },
+      now: () => 1_700_000_500,
+    });
+    await client.propose(ADD_PAIRING, [{ action: 'add-ken', value: { pubkey: 'd'.repeat(64), displayName: 'Ada' } }]);
+    const first = client.pendingProposals();
+    (first[0]!.value as { displayName: string }).displayName = 'TAMPERED';
+    (first[0] as { action: string }).action = 'rename-app-label';
+    const second = client.pendingProposals();
+    expect((second[0]!.value as { displayName: string }).displayName).toBe('Ada');
+    expect(second[0]!.action).toBe('add-ken');
   });
 });

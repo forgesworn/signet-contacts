@@ -24,6 +24,8 @@ import {
 } from './wire/constants.js';
 import type { Capability } from './wire/constants.js';
 import { parsePairingAckV2, pairingFromAck } from './wire/ack.js';
+import { openVaultPayload } from './wire/envelope.js';
+import { isHex } from './wire/ids.js';
 import { buildPairingUriV2, parsePairingRequestV2 } from './wire/pairing.js';
 import { parseProjection, projectionFilter } from './wire/projection.js';
 import { buildProposalBatch, draftToProposal, proposalEventTemplate } from './wire/proposal.js';
@@ -106,6 +108,29 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => { setTimeout(resolve, ms); });
 }
 
+/**
+ * Fix round 1, I2: a stored pending row is trusted no further than a wire
+ * value would be — `operationId` is checked as the 32-hex id it always is
+ * (`randomHex(16)`), and `value`'s shape is checked against the SAME two
+ * value types the wire itself allows, per `action`.
+ */
+function isValidPendingProposal(candidate: unknown): candidate is PendingProposal {
+  if (typeof candidate !== 'object' || candidate === null) return false;
+  const o = candidate as Record<string, unknown>;
+  if (!isHex(o.operationId, 32)) return false;
+  if (typeof o.sentAt !== 'number' || !Number.isFinite(o.sentAt)) return false;
+  if (typeof o.value !== 'object' || o.value === null) return false;
+  const v = o.value as Record<string, unknown>;
+  if (o.action === 'add-ken') {
+    return isHex(v.pubkey, 64) && typeof v.displayName === 'string';
+  }
+  if (o.action === 'rename-app-label') {
+    return isHex(v.contactId, 32) && typeof v.label === 'string'
+      && typeof v.updatedAt === 'number' && Number.isFinite(v.updatedAt);
+  }
+  return false;
+}
+
 export function createSignetContactsClient(opts: {
   signer: ContactsSigner; relay: RelayIo; storage?: StorageIo; now?: () => number;
   maxPendingStalenessSeconds?: number;
@@ -126,14 +151,28 @@ export function createSignetContactsClient(opts: {
   const revokedListeners = new Set<(grantId: string) => void>();
   let revokedAnnounced = false;
 
-  async function persist(): Promise<void> {
+  async function persistState(): Promise<void> {
     if (state.grantId === null) return;
     try {
       await storage.set(`${STATE_KEY_PREFIX}${state.grantId}`, JSON.stringify(state));
-      await storage.set(`${PENDING_KEY_PREFIX}${state.grantId}`, JSON.stringify(pending));
     } catch {
       // Storage is a convenience, not a correctness requirement — an app with a
       // full or unavailable store keeps working on in-memory state this session.
+    }
+  }
+
+  /**
+   * Controller correction M1: keyed off the CALLER's `grantId` (known the
+   * moment a pairing exists), never `state.grantId` — which stays null until
+   * the first successful `fetchProjection`. A proposal sent before that first
+   * fetch is exactly the "asked, not answered yet" case R-9 exists for, and it
+   * must survive a restart just as much as a proposal sent afterwards.
+   */
+  async function persistPending(grantId: string): Promise<void> {
+    try {
+      await storage.set(`${PENDING_KEY_PREFIX}${grantId}`, JSON.stringify(pending));
+    } catch {
+      // See persistState — storage is a convenience, not a correctness input.
     }
   }
 
@@ -198,7 +237,13 @@ export function createSignetContactsClient(opts: {
                   // screen — either way this is not a valid ack for this request.
                   const overGranted = allowed !== null
                     && ack.grantedCapabilities.some((c) => !allowed.has(c));
-                  if (!overGranted) return pairingFromAck(ack, now());
+                  // Fix round 1, M4: a rail that is the app's OWN pubkey is
+                  // nonsensical for this wire (the app cannot be its own
+                  // signing rail) and would make the projection's later
+                  // author-pin check trivially satisfiable by anything the
+                  // app itself ever publishes — reject rather than pair.
+                  const selfRail = ack.railPubkey.toLowerCase() === signer.pubkey.toLowerCase();
+                  if (!overGranted && !selfRail) return pairingFromAck(ack, now());
                 }
               } catch {
                 // Not our ack, or not decryptable by us — keep waiting rather
@@ -231,14 +276,24 @@ export function createSignetContactsClient(opts: {
         }
         if (typeof event.content !== 'string') return null;
 
-        let plaintext: string;
-        try {
-          plaintext = await signer.nip44Decrypt(pairing.railPubkey, event.content);
-        } catch {
-          return null;
-        }
+        // Fix round 1, C2 (ruling R-4): the app publishes every private-state
+        // rail — this grant's projection included — as a v2 VAULT ENVELOPE
+        // (`{v:2,k,iv,ct,b}`: a random AES-256-GCM content key, itself
+        // NIP-44-wrapped), never a bare NIP-44 payload. A bare
+        // `signer.nip44Decrypt` here would try to NIP-44-decrypt that JSON
+        // and fail on every real projection.
+        const plaintext = await openVaultPayload(event.content, signer, pairing.railPubkey);
+        if (plaintext === null) return null;
+
         const projection = parseProjection(plaintext);
         if (!projection || projection.grantId !== pairing.grantId) return null;
+
+        // Fix round 1, M3: the grant's own `grantedCapabilities` is a ceiling
+        // on what this projection may claim to carry — a producer (or a
+        // relay replaying an old event from before a narrowing) cannot hand
+        // out MORE scopes than the app was actually granted.
+        const grantedSet = new Set(pairing.grantedCapabilities);
+        if (projection.scopes.some((s) => !grantedSet.has(s))) return null;
 
         // Controller correction 2: the grant's own clamped ceiling on how
         // stale a projection may be, enforced independently of whatever the
@@ -249,10 +304,14 @@ export function createSignetContactsClient(opts: {
 
         const nowSec = now();
         const next = applyProjection(state, projection, nowSec);
-        if (next === state) return projection;
+        // Fix round 1, I1: `next === state` means the frontier rule REJECTED
+        // this projection (an older or duplicate replay) — the caller must
+        // not be handed a projection that was never actually applied.
+        if (next === state) return null;
         state = next;
         reconcilePending(projection, nowSec);
-        await persist();
+        await persistState();
+        await persistPending(pairing.grantId);
         if (state.revoked && !revokedAnnounced) {
           revokedAnnounced = true;
           for (const cb of revokedListeners) cb(state.grantId ?? projection.grantId);
@@ -294,10 +353,19 @@ export function createSignetContactsClient(opts: {
       } catch {
         return false;
       }
-      const content = await signer.nip44Encrypt(pairing.railPubkey, plaintext);
-      const template = proposalEventTemplate(signer.pubkey, pairing.grantId, createdAt, content);
-      const event = await signer.signEvent(template);
-      const ok = await relay.publish(event, [pairing.relay]);
+      // Fix round 1, I3: none of the encrypt/sign/publish leg is allowed to
+      // throw out of `propose` — a signer or relay that rejects (a bunker
+      // round-trip failing, a relay socket dropping) is exactly the same
+      // "did not send" outcome as `publish` returning `false`.
+      let ok: boolean;
+      try {
+        const content = await signer.nip44Encrypt(pairing.railPubkey, plaintext);
+        const template = proposalEventTemplate(signer.pubkey, pairing.grantId, createdAt, content);
+        const event = await signer.signEvent(template);
+        ok = await relay.publish(event, [pairing.relay]);
+      } catch {
+        return false;
+      }
       // R-9: only a proposal that actually reached a relay is pending. One that
       // never got out is not "waiting for the owner", it is "not sent".
       if (ok) {
@@ -307,12 +375,20 @@ export function createSignetContactsClient(opts: {
             value: proposal.value, sentAt: createdAt,
           });
         }
-        await persist();
+        // Fix round 1, M1: keyed off `pairing.grantId`, not `state.grantId` —
+        // see `persistPending`'s own note.
+        await persistPending(pairing.grantId);
       }
       return ok;
     },
 
-    pendingProposals() { return [...pending]; },
+    // Fix round 1, M2: a deep copy. `pendingProposals()` is documented
+    // read-only; a shallow `[...pending]` still hands out the SAME `value`
+    // object each entry wraps, so a caller mutating `pending[0].value.label`
+    // (say) would corrupt this client's own internal state.
+    pendingProposals() {
+      return pending.map((p) => ({ ...p, value: { ...p.value } }));
+    },
 
     onRevoked(cb) {
       revokedListeners.add(cb);
@@ -324,12 +400,15 @@ export function createSignetContactsClient(opts: {
         const rawPending = await storage.get(`${PENDING_KEY_PREFIX}${grantId}`);
         if (rawPending) {
           const parsed = JSON.parse(rawPending) as unknown;
-          if (Array.isArray(parsed)) {
-            pending = parsed.filter((p): p is PendingProposal =>
-              typeof p === 'object' && p !== null
-              && typeof (p as PendingProposal).operationId === 'string'
-              && typeof (p as PendingProposal).sentAt === 'number');
-          }
+          // Fix round 1, I2: a per-row shape check, not just "has the two
+          // fields every row happens to share" — a row this client wrote is
+          // always well-formed, but the STORE is outside this client's
+          // control (shared with the rest of the app, editable by devtools,
+          // subject to partial writes), and `reconcilePending` later does
+          // `(p.value as AddKenValue).pubkey.toLowerCase()` unconditionally —
+          // a malformed row would throw there on every future
+          // `fetchProjection`, not just at load time.
+          if (Array.isArray(parsed)) pending = parsed.filter(isValidPendingProposal);
         }
       } catch {
         // Unreadable pending state: start with none. It is a UI convenience,
@@ -340,9 +419,22 @@ export function createSignetContactsClient(opts: {
         if (raw) {
           const parsed = JSON.parse(raw) as Partial<ContactsState>;
           if (typeof parsed === 'object' && parsed !== null && Array.isArray(parsed.blockedPubkeys)) {
+            // Fix round 1, I2: re-validate the stored projection through the
+            // same guards a fresh wire projection gets, rather than trusting
+            // whatever JSON happens to be sitting in the store. `state.
+            // projection` feeds `applyProjection`'s frontier comparison on
+            // every later `fetchProjection` — a corrupt row here would throw
+            // there FOREVER (caught by that call's own try/catch, but always
+            // returning null), wedging the grant shut. Dropping just the
+            // projection (never `blockedPubkeys`, the one thing that must
+            // stay sticky) recovers cleanly: the next real fetch is treated
+            // like this grant's first.
+            const projection = parsed.projection === null || parsed.projection === undefined
+              ? null
+              : parseProjection(JSON.stringify(parsed.projection));
             state = {
               grantId: typeof parsed.grantId === 'string' ? parsed.grantId : grantId,
-              projection: parsed.projection ?? null,
+              projection,
               receivedAt: typeof parsed.receivedAt === 'number' ? parsed.receivedAt : 0,
               blockedPubkeys: parsed.blockedPubkeys.filter((p): p is string => typeof p === 'string'),
               revoked: parsed.revoked === true,
