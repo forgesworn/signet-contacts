@@ -1,0 +1,41 @@
+{
+  "name": "@forgesworn/signet-contacts",
+  "version": "0.1.0",
+  "description": "The v2 wire for application access to Signet contacts: capability-scoped pairing, per-grant encrypted projections, and app proposals.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": { "types": "./dist/index.d.ts", "default": "./dist/index.js" },
+    "./wire": { "types": "./dist/wire/index.d.ts", "default": "./dist/wire/index.js" },
+    "./adapters/nostr-tools": { "types": "./dist/adapters/nostr-tools.d.ts", "default": "./dist/adapters/nostr-tools.js" }
+  },
+  "files": ["dist", "vectors", "docs", "LICENSE", "README.md", "SECURITY.md"],
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "vectors:check": "node ./scripts/check-vectors.mjs",
+    "no-console": "node ./scripts/no-console.mjs",
+    "prepare": "npm run build",
+    "prepublishOnly": "npm run typecheck && npm test && npm run build && npm run vectors:check"
+  },
+  "keywords": ["nostr", "signet", "contacts", "nip-44", "grants", "capabilities"],
+  "author": "forgesworn",
+  "license": "MIT",
+  "sideEffects": false,
+  "engines": { "node": ">=22" },
+  "dependencies": { "@noble/hashes": "^2.0.1" },
+  "peerDependencies": { "nostr-tools": "^2.24.1" },
+  "peerDependenciesMeta": { "nostr-tools": { "optional": true } },
+  "devDependencies": {
+    "@types/node": "^22",
+    "nostr-tools": "^2.24.1",
+    "typescript": "^6.0.2",
+    "vitest": "^4.1.10"
+  },
+  "repository": { "type": "git", "url": "git+https://github.com/forgesworn/signet-contacts.git" },
+  "homepage": "https://github.com/forgesworn/signet-contacts#readme",
+  "bugs": { "url": "https://github.com/forgesworn/signet-contacts/issues" }
+}
