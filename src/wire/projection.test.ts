@@ -135,6 +135,25 @@ describe('buildProjection / parseProjection', () => {
     expect(() => buildProjection(projection({ expiresAt: 1_600_000_000 }))).toThrow();
   });
 
+  it('throws when a scope would be silently narrowed in transit', () => {
+    // 'signet.contacts.read:bogus' is not a real capability — the parser
+    // drops it, which would ship a grant promising less than the caller
+    // asked for unless the builder catches it.
+    expect(() => buildProjection(projection({
+      scopes: ['signet.contacts.read:directory', 'signet.contacts.read:bogus'] as unknown as ContactProjectionV2['scopes'],
+    }))).toThrow();
+  });
+
+  it('does not throw when the same scope set is given in a different order', () => {
+    const a = buildProjection(projection({
+      scopes: ['signet.contacts.read:directory', 'signet.contacts.read:roles'],
+    }));
+    const b = buildProjection(projection({
+      scopes: ['signet.contacts.read:roles', 'signet.contacts.read:directory'],
+    }));
+    expect(a).toBe(b);
+  });
+
   it('drops an individually invalid contact and keeps the rest', () => {
     const good = buildProjection(projection({ contacts: [contact(), contact({ contactId: '9'.repeat(32) })] }));
     const tampered = good.replace('"' + '9'.repeat(32) + '"', '"bad"');

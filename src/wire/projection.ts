@@ -280,6 +280,23 @@ export function buildProjection(projection: ContactProjectionV2): string {
   if (!deepEqualJson(reparsed.contacts, draftContacts)) {
     throw new TypeError('signet-contacts: projection would rewrite contact fields in transit');
   }
+  // A scope the parser drops (an unknown capability string, or one past the
+  // `MAX_CAPABILITIES` cap) is exactly the same silent-narrowing hazard as a
+  // dropped contact — the grant would ship promising less than the caller
+  // asked for, with nothing to say so. Compared against the caller's RAW
+  // scopes (cast to `string[]` — a caller can smuggle a non-`Capability`
+  // string past the type system, and that is precisely the case this check
+  // exists to catch), never against `normaliseCapabilities(projection.scopes)`:
+  // that function itself only ever keeps values already in the known
+  // `CAPABILITIES` list, so it would silently agree with the parser and never
+  // reveal that anything was dropped. Order-insensitive set comparison.
+  const rawScopeSet = new Set(projection.scopes as readonly string[]);
+  const reparsedScopeSet = new Set(reparsed.scopes as readonly string[]);
+  const sameScopeSet = rawScopeSet.size === reparsedScopeSet.size
+    && [...rawScopeSet].every((s) => reparsedScopeSet.has(s));
+  if (!sameScopeSet) {
+    throw new TypeError('signet-contacts: projection would narrow scopes in transit');
+  }
 
   const json = JSON.stringify(bodyOf(reparsed, reparsed.scopes, reparsed.contacts));
   // R-5: fail closed on an over-cap body. The producer is expected to have
