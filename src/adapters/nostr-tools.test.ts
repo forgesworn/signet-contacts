@@ -60,4 +60,115 @@ describe('createSimplePoolRelayIo', () => {
     stop();
     expect(close).toHaveBeenCalledTimes(1);
   });
+
+  it('picks the newest event across relays when they disagree', async () => {
+    const older: SignedNostrEvent = { ...EVENT, id: '1'.repeat(64), created_at: 3 };
+    const newer: SignedNostrEvent = { ...EVENT, id: '2'.repeat(64), created_at: 5 };
+    const get = vi.fn(async (relays: string[]) => (relays[0] === 'wss://a.example' ? older : newer));
+    const io = createSimplePoolRelayIo({ get, publish: () => [], subscribeMany: () => ({ close() {} }) });
+    const result = await io.fetchNewest(
+      { kinds: [30078] }, ['wss://a.example', 'wss://b.example'], EVENT.pubkey,
+    );
+    expect(result).toEqual(newer);
+    expect(get).toHaveBeenNthCalledWith(1, ['wss://a.example'], { kinds: [30078] });
+    expect(get).toHaveBeenNthCalledWith(2, ['wss://b.example'], { kinds: [30078] });
+  });
+
+  it('breaks a same-created_at tie by the lowest id', async () => {
+    const highId: SignedNostrEvent = { ...EVENT, id: 'f'.repeat(64), created_at: 5 };
+    const lowId: SignedNostrEvent = { ...EVENT, id: '0'.repeat(64), created_at: 5 };
+    const get = vi.fn(async (relays: string[]) => (relays[0] === 'wss://a.example' ? highId : lowId));
+    const io = createSimplePoolRelayIo({ get, publish: () => [], subscribeMany: () => ({ close() {} }) });
+    const result = await io.fetchNewest(
+      { kinds: [30078] }, ['wss://a.example', 'wss://b.example'], EVENT.pubkey,
+    );
+    expect(result).toEqual(lowId);
+  });
+
+  it('bounds fetchNewest to timeoutMs and resolves null on a stalling relay, clearing the timer', async () => {
+    vi.useFakeTimers();
+    try {
+      const get = vi.fn(() => new Promise<never>(() => {}));
+      const io = createSimplePoolRelayIo(
+        { get, publish: () => [], subscribeMany: () => ({ close() {} }) }, { timeoutMs: 5000 },
+      );
+      const pending = io.fetchNewest({ kinds: [30078] }, ['wss://r.example']);
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(await pending).toBeNull();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('clears the timer immediately when a relay answers before the timeout', async () => {
+    vi.useFakeTimers();
+    try {
+      const get = vi.fn(async () => EVENT);
+      const io = createSimplePoolRelayIo(
+        { get, publish: () => [], subscribeMany: () => ({ close() {} }) }, { timeoutMs: 5000 },
+      );
+      const result = await io.fetchNewest({ kinds: [30078] }, ['wss://r.example'], EVENT.pubkey);
+      expect(result).toEqual(EVENT);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('bounds publish to timeoutMs and resolves false when every relay stalls, clearing the timer', async () => {
+    vi.useFakeTimers();
+    try {
+      const io = createSimplePoolRelayIo(
+        {
+          get: async () => null,
+          publish: () => [new Promise<never>(() => {})],
+          subscribeMany: () => ({ close() {} }),
+        },
+        { timeoutMs: 4000 },
+      );
+      const pending = io.publish(EVENT, ['wss://a.example']);
+      await vi.advanceTimersByTimeAsync(4000);
+      expect(await pending).toBe(false);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('resolves publish true when one relay answers before the timeout and another stalls', async () => {
+    vi.useFakeTimers();
+    try {
+      const io = createSimplePoolRelayIo(
+        {
+          get: async () => null,
+          publish: () => [new Promise<never>(() => {}), Promise.resolve('ok')],
+          subscribeMany: () => ({ close() {} }),
+        },
+        { timeoutMs: 4000 },
+      );
+      const pending = io.publish(EVENT, ['wss://a.example', 'wss://b.example']);
+      await vi.advanceTimersByTimeAsync(4000);
+      expect(await pending).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('throws synchronously for a relay URL that is neither wss:// nor loopback ws://', () => {
+    const io = createSimplePoolRelayIo({
+      get: async () => null, publish: () => [], subscribeMany: () => ({ close() {} }),
+    });
+    expect(() => io.fetchNewest({ kinds: [30078] }, ['http://evil.example'])).toThrow(TypeError);
+    expect(() => io.publish(EVENT, ['ws://evil.example'])).toThrow(TypeError);
+    expect(() => io.subscribe!({ kinds: [30078] }, ['ws://192.168.1.1'], () => {})).toThrow(TypeError);
+  });
+
+  it('accepts wss:// and loopback ws:// relays', async () => {
+    const get = vi.fn(async () => null);
+    const io = createSimplePoolRelayIo({ get, publish: () => [], subscribeMany: () => ({ close() {} }) });
+    await expect(io.fetchNewest({ kinds: [30078] }, ['ws://localhost:4869'])).resolves.toBeNull();
+    await expect(io.fetchNewest({ kinds: [30078] }, ['ws://127.0.0.1:4869'])).resolves.toBeNull();
+    await expect(io.fetchNewest({ kinds: [30078] }, ['wss://relay.example'])).resolves.toBeNull();
+  });
 });
