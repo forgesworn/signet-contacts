@@ -73,7 +73,10 @@ export interface ContactProjectionV2 {
 }
 
 export interface AddKenValue { pubkey: string; displayName: string }
-export interface RenameAppLabelValue { contactId: string; label: string }
+/** R-7: `updatedAt` (ms epoch, integer >= 0) is the last-writer-wins clock the
+ *  app compares a rename against — without it a replayed stale rename could
+ *  re-apply an old label over a newer one (S6). */
+export interface RenameAppLabelValue { contactId: string; label: string; updatedAt: number }
 export interface ContactProposalV1 {
   v: 1; grantId: string; operationId: string;
   action: 'add-ken' | 'rename-app-label';
@@ -81,10 +84,12 @@ export interface ContactProposalV1 {
   createdAt: number;
 }
 export interface ProposalBatch { v: 1; proposals: ContactProposalV1[] }
-/** What a consumer passes to `client.propose` — `operationId` is minted for it. */
+/** What a consumer passes to `client.propose` — `operationId` is minted for it.
+ *  A rename draft's `updatedAt` is optional: `draftToProposal` stamps it from
+ *  the draft when given, else from `Date.now()` (R-7). */
 export type ContactProposalDraft =
   | { action: 'add-ken'; value: AddKenValue }
-  | { action: 'rename-app-label'; value: RenameAppLabelValue };
+  | { action: 'rename-app-label'; value: Omit<RenameAppLabelValue, 'updatedAt'> & { updatedAt?: number } };
 
 export interface ContactsState {
   grantId: string | null;

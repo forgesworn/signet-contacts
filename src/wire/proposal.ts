@@ -44,7 +44,12 @@ export function parseProposal(raw: unknown): ContactProposalV1 | null {
     if (!isHex(value.contactId, 32)) return null;
     const label = sanitizeWireText(value.label, MAX_APP_LABEL);
     if (label.length === 0) return null;
-    const v: RenameAppLabelValue = { contactId: value.contactId, label };
+    // R-7: last-writer-wins clock. Missing or malformed drops the whole
+    // proposal — a rename with no comparable timestamp cannot be applied
+    // safely, and a replayed stale rename must not be able to re-apply an
+    // old label over a newer one (S6).
+    if (typeof value.updatedAt !== 'number' || !Number.isInteger(value.updatedAt) || value.updatedAt < 0) return null;
+    const v: RenameAppLabelValue = { contactId: value.contactId, label, updatedAt: value.updatedAt };
     return { v: 1, grantId: o.grantId, operationId: o.operationId, action: 'rename-app-label', value: v, createdAt: o.createdAt };
   }
   return null;
@@ -85,9 +90,17 @@ export function buildProposalBatch(proposals: readonly ContactProposalV1[]): str
 }
 
 /** Mint a wire proposal from a consumer draft. `operationId` is the idempotency
- *  key: a producer that has already applied it does nothing on a retry. */
+ *  key: a producer that has already applied it does nothing on a retry.
+ *
+ *  R-7: a `rename-app-label` draft's `updatedAt` is stamped from the draft
+ *  when the consumer supplied one (e.g. an app replaying its own local edit
+ *  timestamp), else from `Date.now()` at mint time — ms epoch either way. */
 export function draftToProposal(draft: ContactProposalDraft, grantId: string, createdAt: number): ContactProposalV1 {
-  return { v: 1, grantId, operationId: randomHex(16), action: draft.action, value: draft.value, createdAt };
+  if (draft.action === 'rename-app-label') {
+    const value: RenameAppLabelValue = { ...draft.value, updatedAt: draft.value.updatedAt ?? Date.now() };
+    return { v: 1, grantId, operationId: randomHex(16), action: 'rename-app-label', value, createdAt };
+  }
+  return { v: 1, grantId, operationId: randomHex(16), action: 'add-ken', value: draft.value, createdAt };
 }
 
 export function proposalEventTemplate(
