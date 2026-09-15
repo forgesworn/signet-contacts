@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { buildPairingUriV2, parsePairingRequestV2, isValidContactsRelayUrl } from './pairing.js';
+import { CAPABILITIES } from './constants.js';
 
 const NOW = 1_700_000_000;
 const BASE = {
@@ -31,6 +32,14 @@ describe('buildPairingUriV2', () => {
 
   it('refuses an empty capability list', () => {
     expect(() => buildPairingUriV2({ ...BASE, capabilities: [] })).toThrow(TypeError);
+  });
+
+  it('rejects a non-lowercase app pubkey — asymmetric with the parser, intentionally', () => {
+    // The builder fully controls its own output, so it never needs to normalise
+    // anything it emits; an upper-case (or mixed-case) pubkey is refused outright
+    // rather than silently lowercased. Contrast with parsePairingRequestV2 below,
+    // which accepts and lowercases an upper-case pubkey on read.
+    expect(() => buildPairingUriV2({ ...BASE, appPubkey: BASE.appPubkey.toUpperCase() })).toThrow(TypeError);
   });
 });
 
@@ -108,6 +117,36 @@ describe('parsePairingRequestV2', () => {
   it('rejects a malformed input outright', () => {
     expect(parsePairingRequestV2('', { nowSec: NOW }).request).toBeNull();
     expect(parsePairingRequestV2('not a uri at all', { nowSec: NOW }).request).toBeNull();
+  });
+
+  it('lowercases an upper-case app pubkey — asymmetric with the builder, intentionally', () => {
+    // The parser reads URIs it did not produce (a QR scan, a paste), so it is
+    // lenient and lowercases on read; the builder above stays strict since it
+    // fully controls its own output.
+    const uri = buildPairingUriV2(BASE).replace(BASE.appPubkey, BASE.appPubkey.toUpperCase());
+    const { request, warnings } = parsePairingRequestV2(uri, { nowSec: NOW });
+    expect(request?.appPubkey).toBe(BASE.appPubkey);
+    expect(warnings).toEqual([]);
+  });
+
+  it('warns and truncates when the capability list exceeds MAX_CAPABILITIES', () => {
+    // Only 6 valid capability tokens exist (CAPABILITIES), so a boundary test
+    // with 17 DISTINCT VALID tokens is not constructible. Per the fix-round
+    // instruction this instead uses 16 raw tokens (cycling the 6 valid
+    // capabilities so every one of them appears) plus a 17th, unknown, trailing
+    // token, and asserts: the 17th token is sliced away by MAX_CAPABILITIES
+    // before the unknown-token check runs (so 'caps-unknown-token' never
+    // fires), 'caps-truncated' does fire, and the full known set survives.
+    const cycled = Array.from({ length: 16 }, (_, i) => CAPABILITIES[i % CAPABILITIES.length]);
+    const rawCaps = [...cycled, 'signet.contacts.read:everything'].join(',');
+    const uri = buildPairingUriV2(BASE).replace(
+      '&caps=signet.contacts.read%3Adirectory%2Csignet.contacts.blocks.read',
+      `&caps=${encodeURIComponent(rawCaps)}`,
+    );
+    const { request, warnings } = parsePairingRequestV2(uri, { nowSec: NOW });
+    expect(warnings).toContain('caps-truncated');
+    expect(warnings).not.toContain('caps-unknown-token');
+    expect(request?.capabilities).toEqual([...CAPABILITIES]);
   });
 });
 

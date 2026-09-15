@@ -79,7 +79,9 @@ export function parsePairingRequestV2(
   const challenge = params.get('challenge') ?? '';
   if (!CHALLENGE_HEX.test(challenge)) return { request: null, warnings: ['bad-challenge'] };
 
-  const rawCaps = (params.get('caps') ?? '').split(',').map((c) => c.trim()).filter(Boolean).slice(0, MAX_CAPABILITIES);
+  const splitCaps = (params.get('caps') ?? '').split(',').map((c) => c.trim()).filter(Boolean);
+  if (splitCaps.length > MAX_CAPABILITIES) warnings.push('caps-truncated');
+  const rawCaps = splitCaps.slice(0, MAX_CAPABILITIES);
   const known = rawCaps.filter((c): c is Capability => isCapability(c));
   if (rawCaps.some((c) => !isCapability(c))) warnings.push('caps-unknown-token');
   if (known.length === 0) {
