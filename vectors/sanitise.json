@@ -7,11 +7,11 @@
       "output": "Sam"
     },
     {
-      "input": "Ada‮eda",
+      "input": "Ada\u202eeda",
       "output": "Adaeda"
     },
     {
-      "input": "Ada​Bo",
+      "input": "Ada\u200bBo",
       "output": "AdaBo"
     },
     {
@@ -27,7 +27,7 @@
       "output": ""
     },
     {
-      "input": "⁦isolate⁩",
+      "input": "\u2066isolate\u2069",
       "output": "isolate"
     },
     {
@@ -43,8 +43,12 @@
       "output": ""
     },
     {
-      "input": "🜂 sigil",
-      "output": "🜂 sigil"
+      "input": "\ud83d\udf02 sigil",
+      "output": "\ud83d\udf02 sigil"
+    },
+    {
+      "input": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\ud83d\udf02yyyyy",
+      "output": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\ud83d\udf02"
     }
   ]
 }

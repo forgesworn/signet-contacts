@@ -22,9 +22,38 @@ const DEVICE = '2'.repeat(32);
 const CHALLENGE = 'D'.repeat(32);
 const WRITE = process.env.WRITE_VECTORS === '1';
 
+/** Fix round 1: `JSON.stringify` does not escape non-ASCII -- a literal bidi
+ *  override, zero-width character, or emoji embedded in a fixture (the whole
+ *  point of `sanitise.json`) would otherwise land in the frozen file as raw
+ *  UTF-8 bytes: invisible in an editor, easy to corrupt via copy-paste, and
+ *  indistinguishable at a glance from a byte a reviewer actually meant to
+ *  approve. This rewrites every character outside printable ASCII
+ *  (U+0020-U+007E) to a backslash-u escape, one per UTF-16 code unit -- so an
+ *  astral character (outside the BMP, e.g. an emoji) comes out as its
+ *  surrogate pair's two escapes, which is the only way JSON can spell it.
+ *
+ *  Tab/newline/CR are exempted: any occurrence of one of those INSIDE a JSON
+ *  string value has already been escaped textually by JSON.stringify (a
+ *  literal newline in a string becomes the two ASCII characters backslash
+ *  and "n"); the only raw tab/newline/CR bytes left in the stringified
+ *  output are JSON.stringify's own pretty-print indentation, which must stay
+ *  literal or the file stops being valid, readable JSON. Every other
+ *  character JSON.stringify already escapes textually (a quote, a NUL, ...)
+ *  is untouched here for the same reason -- its escaped form is already
+ *  plain ASCII. */
+function escapeNonAscii(json: string): string {
+  let out = '';
+  for (let i = 0; i < json.length; i++) {
+    const code = json.charCodeAt(i);
+    const literal = (code >= 0x20 && code <= 0x7e) || code === 0x09 || code === 0x0a || code === 0x0d;
+    out += literal ? json[i] : `\\u${code.toString(16).padStart(4, '0')}`;
+  }
+  return out;
+}
+
 function frozen(path: string, actual: unknown): void {
   mkdirSync('vectors', { recursive: true });
-  const json = `${JSON.stringify(actual, null, 2)}\n`;
+  const json = `${escapeNonAscii(JSON.stringify(actual, null, 2))}\n`;
   if (WRITE || !existsSync(path)) {
     writeFileSync(path, json, 'utf8');
     return;
@@ -146,6 +175,14 @@ describe('vectors', () => {
     // package) run the SAME function, so this file is what proves a future
     // edit to either side did not quietly change the class. signet-app asserts
     // against this exact file in `contacts-sdk-smoke.test.ts`.
+    // Fix round 1: SURROGATE_BOUNDARY is 99 ASCII characters followed by
+    // one astral emoji (one code point, two UTF-16 units) then more filler --
+    // built so a CODE-POINT-safe cap at MAX_DISPLAY_NAME (100) keeps the 99
+    // characters plus the whole emoji (its 100th code point) and drops
+    // everything after, whereas a UTF-16-unit cap of the same number would
+    // slice straight through the emoji's surrogate pair, leaving a lone
+    // surrogate on the wire.
+    const SURROGATE_BOUNDARY = `${'x'.repeat(MAX_DISPLAY_NAME - 1)}🜂yyyyy`;
     const cases = [
       '  Sam  ',
       'Ada‮eda',
@@ -158,6 +195,7 @@ describe('vectors', () => {
       '',
       '   ',
       '🜂 sigil',
+      SURROGATE_BOUNDARY,
     ];
     const pairs = cases.map((input) => ({ input, output: sanitizeWireText(input, MAX_DISPLAY_NAME) }));
     // A spot-check, so a regenerated file that is wrong still fails here.
@@ -165,6 +203,13 @@ describe('vectors', () => {
     expect(pairs[1]?.output).toBe('Adaeda');
     expect(pairs[7]?.output).toHaveLength(MAX_DISPLAY_NAME);
     expect(pairs[9]?.output).toBe('');
+    // R-ruling (fix round 1): the cap lands exactly on the surrogate-pair
+    // boundary -- the whole emoji survives, the pair is never split, and
+    // nothing after it (the 'yyyyy' filler) makes it through.
+    const boundaryOutput = pairs[11]?.output ?? '';
+    expect(boundaryOutput).toBe(`${'x'.repeat(MAX_DISPLAY_NAME - 1)}🜂`);
+    expect(Array.from(boundaryOutput)).toHaveLength(MAX_DISPLAY_NAME);
+    expect(/[\uD800-\uDFFF]/.test(boundaryOutput.replace(/[\uD800-\uDBFF][\uDC00-\uDFFF]/g, ''))).toBe(false);
 
     frozen('vectors/sanitise.json', {
       description: 'sanitizeWireText: the one sanitiser on this wire. Producer and parser must agree byte for byte.',
@@ -271,5 +316,32 @@ describe('vectors', () => {
       sealed,
       parsed,
     });
+  });
+
+  // Fix round 1. Runs after every `frozen()` call above has written its file
+  // for this test run (vitest runs `it`s within one `describe` in declaration
+  // order), and reads the files back as raw BYTES rather than a decoded
+  // string, so an escaping regression cannot hide behind a lenient decoder.
+  it('never puts a raw non-ASCII byte or an unescaped control character in a frozen vector file', () => {
+    const files = [
+      'vectors/pairing.v2.json',
+      'vectors/projection.v2.json',
+      'vectors/proposal.v1.json',
+      'vectors/sanitise.json',
+      'vectors/envelope.v2.json',
+    ];
+    for (const path of files) {
+      const bytes = readFileSync(path);
+      for (let i = 0; i < bytes.length; i++) {
+        const byte = bytes[i]!;
+        // Structural pretty-print whitespace only: tab, LF, CR.
+        const isStructuralWhitespace = byte === 0x09 || byte === 0x0a || byte === 0x0d;
+        expect(byte, `${path} byte ${i} (0x${byte.toString(16)}) must be < 0x80`).toBeLessThan(0x80);
+        if (byte < 0x20) {
+          expect(isStructuralWhitespace, `${path} byte ${i} (0x${byte.toString(16)}) is a raw control character`).toBe(true);
+        }
+        expect(byte, `${path} byte ${i} must not be DEL (0x7f)`).not.toBe(0x7f);
+      }
+    }
   });
 });

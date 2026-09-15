@@ -84,12 +84,22 @@ export function randomHex(bytes: number): string {
  *  become the empty string rather than `String(value)` — a wire field that is
  *  not a string is missing data, not data that needs coercing.
  *
+ *  `maxLen` counts CODE POINTS, not UTF-16 code units: the cap is applied via
+ *  `Array.from(string)`, which iterates by code point, so a cap can never
+ *  land inside a surrogate pair. A plain `.slice(0, maxLen)` operates on
+ *  UTF-16 units and can split a pair in two, leaving a lone surrogate on the
+ *  wire — a malformed string a receiver's `JSON.parse`/display layer may
+ *  choke on or render as a replacement character.
+ *
  *  R-6: this is the ONLY sanitiser on this wire. signet-app's projection
  *  builder imports THIS function rather than using its own
  *  `sanitizeDisplayName`, so a producer can never emit a string its own parser
  *  would rewrite — which would make `buildProjection` throw on every rebuild
- *  and kill that grant's rail permanently and silently. */
+ *  and kill that grant's rail permanently and silently. (signet-app's OWN
+ *  display sanitiser still slices by UTF-16 unit — a separate, pre-existing
+ *  gap in that repo, not fixed here.) */
 export function sanitizeWireText(raw: unknown, maxLen: number): string {
   if (typeof raw !== 'string') return '';
-  return raw.replace(CONTROL_BIDI, '').trim().slice(0, maxLen);
+  const stripped = raw.replace(CONTROL_BIDI, '').trim();
+  return Array.from(stripped).slice(0, maxLen).join('');
 }

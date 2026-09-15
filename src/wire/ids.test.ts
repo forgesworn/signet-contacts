@@ -65,4 +65,17 @@ describe('sanitizeWireText', () => {
     expect(sanitizeWireText(undefined, 10)).toBe('');
     expect(sanitizeWireText(7, 10)).toBe('');
   });
+
+  it('caps by CODE POINT, never splitting a surrogate pair', () => {
+    // U+1F702 ALCHEMICAL SYMBOL FOR SULFUR ('🜂') is one code point but two
+    // UTF-16 code units — a `.slice(0, N)` landing between them would leave a
+    // lone surrogate. maxLen=1 keeps only 'x' and drops the whole emoji.
+    expect(sanitizeWireText('x🜂', 1)).toBe('x');
+    // maxLen=2 keeps both 'x' and the whole emoji — never half of it.
+    const kept = sanitizeWireText('x🜂', 2);
+    expect(kept).toBe('x🜂');
+    expect(Array.from(kept)).toHaveLength(2);
+    // No lone surrogate anywhere in the result.
+    expect(/[\uD800-\uDFFF]/.test(kept.replace(/[\uD800-\uDBFF][\uDC00-\uDFFF]/g, ''))).toBe(false);
+  });
 });
