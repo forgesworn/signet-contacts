@@ -94,6 +94,36 @@ describe('applyProjection', () => {
     expect(revoked.revoked).toBe(true);
   });
 
+  it('does not un-revoke via a frontier that is not newer than the one that revoked (F2)', () => {
+    const first = applyProjection(emptyContactsState(), projection(), ISSUED + 1);
+    const revokedAtF2 = applyProjection(first, projection({
+      contacts: [], revoked: true, frontier: { maxClock: 6, opCount: 11, publishedAt: ISSUED + 2, deviceId: DEVICE },
+    }), ISSUED + 2);
+    expect(revokedAtF2.revoked).toBe(true);
+
+    // F1 (the original, older frontier) must not resurrect the directory.
+    const stillRevoked = applyProjection(revokedAtF2, projection({
+      frontier: { maxClock: 5, opCount: 10, publishedAt: ISSUED, deviceId: DEVICE },
+    }), ISSUED + 3);
+    expect(stillRevoked).toBe(revokedAtF2);
+    expect(stillRevoked.revoked).toBe(true);
+
+    // F3, strictly newer than F2, may un-revoke.
+    const unrevoked = applyProjection(revokedAtF2, projection({
+      frontier: { maxClock: 7, opCount: 12, publishedAt: ISSUED + 3, deviceId: DEVICE },
+    }), ISSUED + 4);
+    expect(unrevoked.revoked).toBe(false);
+    expect(unrevoked.projection?.contacts).toHaveLength(2);
+  });
+
+  it('ignores an exact frontier tie (same maxClock and publishedAt) rather than re-applying it', () => {
+    const first = applyProjection(emptyContactsState(), projection(), ISSUED + 1);
+    const same = applyProjection(first, projection({
+      frontier: { maxClock: 5, opCount: 10, publishedAt: ISSUED, deviceId: DEVICE },
+    }), ISSUED + 2);
+    expect(same).toBe(first);
+  });
+
   it('includes linked pubkeys in the blocked set', () => {
     const withLink = projection({
       contacts: [{ ...contact('c'.repeat(32), true, 'd'.repeat(64)), linkedPubkeys: ['e'.repeat(64)] }],

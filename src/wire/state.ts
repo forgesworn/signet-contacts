@@ -10,14 +10,19 @@
  *    the moment it stops. Only a newer, accepted, non-revoked projection may
  *    shrink the Blocked set (spec §7.9, exploration §5.6).
  * 2. **Monotonic frontier, ordered by `(maxClock, publishedAt)` (C13).** A
- *    projection strictly older than the one already held is ignored — a relay
- *    may legitimately answer with an older replaceable event, and applying it
- *    would roll the directory back. `maxClock` alone is not enough: two of the
- *    owner's devices can reach the same clock, and then each would reject the
- *    other for ever, so the tie is broken by which snapshot was published
- *    later. A REVOCATION is exempt from both: a revoking producer may not know
- *    the consumer's frontier, and losing a revocation is far worse than
- *    applying one out of order.
+ *    projection whose frontier is not strictly newer than the one already
+ *    held is ignored — a relay may legitimately answer with an older
+ *    replaceable event, and applying it would roll the directory back; an
+ *    exact tie is likewise ignored rather than re-applied. `maxClock` alone
+ *    is not enough: two of the owner's devices can reach the same clock, and
+ *    then each would reject the other for ever, so the tie is broken by
+ *    which snapshot was published later. This check still runs after a
+ *    revocation — the held frontier then IS the revoking projection's
+ *    frontier, so only a projection strictly newer than the one that
+ *    revoked may un-revoke, and a stale relay replay standing behind the
+ *    revocation can never resurrect the directory. A REVOCATION ITSELF is
+ *    exempt: a revoking producer may not know the consumer's frontier, and
+ *    losing a revocation is far worse than applying one out of order.
  * 3. **Freshness is advisory for reads, never for blocks.** `isFresh` tells an
  *    app its directory may be out of date; `blockedSetOf` is unconditional.
  */
@@ -55,13 +60,14 @@ export function applyProjection(
   // C13: newest wins by `(maxClock, publishedAt)`. `maxClock` alone cannot
   // order two of the owner's devices publishing the same grant — they can
   // legitimately reach the same clock — so a tie is broken by which
-  // snapshot was published later, and only a strictly older one is refused.
-  if (state.projection !== null && !state.revoked) {
+  // snapshot was published later; an exact tie is not newer and is ignored.
+  // Runs regardless of `state.revoked` — see rule 2 above.
+  if (state.projection !== null) {
     const held = state.projection.frontier;
     const incoming = projection.frontier;
-    const older = incoming.maxClock < held.maxClock
-      || (incoming.maxClock === held.maxClock && incoming.publishedAt < held.publishedAt);
-    if (older) return state;
+    const notNewer = incoming.maxClock < held.maxClock
+      || (incoming.maxClock === held.maxClock && incoming.publishedAt <= held.publishedAt);
+    if (notNewer) return state;
   }
 
   return {
