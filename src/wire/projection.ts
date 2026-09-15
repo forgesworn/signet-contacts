@@ -16,7 +16,7 @@
  * `ProjectedContact` means a new capability and a new pairing.
  */
 import {
-  MAX_CONTACTS_PER_PROJECTION, MAX_DISPLAY_NAME, MAX_IDENTITIES_PER_CONTACT,
+  MAX_CAPABILITIES, MAX_CONTACTS_PER_PROJECTION, MAX_DISPLAY_NAME, MAX_IDENTITIES_PER_CONTACT,
   MAX_LINKED_PUBKEYS, MAX_METHODS_PER_CONTACT, MAX_METHOD_VALUE, MAX_ROLES_PER_CONTACT,
   MAX_ROLE_LEN, MAX_URL_LEN, MAX_WIRE_BYTES, PROJECTION_KIND, isCapability, normaliseCapabilities,
 } from './constants.js';
@@ -157,11 +157,24 @@ export function parseProjection(json: string): ContactProjectionV2 | null {
   if (!isHex(frontier.deviceId, 32)) return null;
   if (!Array.isArray(o.contacts)) return null;
 
-  const scopes = normaliseCapabilities(o.scopes.filter((c): c is Capability => isCapability(c)));
+  // M3: cap before filtering, same discipline as every other array on this wire.
+  const scopes = normaliseCapabilities(
+    o.scopes.slice(0, MAX_CAPABILITIES).filter((c): c is Capability => isCapability(c)),
+  );
+  // M5: a later duplicate `contactId` is dropped, keeping the first — two
+  // contacts sharing an id is malformed input, and silently keeping both
+  // would let a hostile relay smuggle a second, different record under an
+  // id the consumer already trusts.
+  const seenContactIds = new Set<string>();
   const contacts = o.contacts
     .slice(0, MAX_CONTACTS_PER_PROJECTION)
     .map(parseProjectedContact)
-    .filter((c): c is ProjectedContact => c !== null);
+    .filter((c): c is ProjectedContact => c !== null)
+    .filter((c) => {
+      if (seenContactIds.has(c.contactId)) return false;
+      seenContactIds.add(c.contactId);
+      return true;
+    });
 
   const projection: ContactProjectionV2 = {
     v: 2,
@@ -209,25 +222,66 @@ function deepEqualJson(a: unknown, b: unknown): boolean {
   return false;
 }
 
-/** Serialise an EXPLICIT projection of the input, then prove it survives its
- *  own parser byte-identically. Throws otherwise — see the module header. */
-export function buildProjection(projection: ContactProjectionV2): string {
+/** Field-by-field body shape shared by the draft (pre-validation) and
+ *  canonical (post-validation) serialisations below — kept as one function so
+ *  the two can never drift into emitting a different field set. */
+function bodyOf(p: ContactProjectionV2, scopes: readonly Capability[], contacts: readonly ProjectedContact[]): Record<string, unknown> {
   const body: Record<string, unknown> = {
     v: 2,
-    grantId: projection.grantId,
-    ownerPubkey: projection.ownerPubkey,
-    scopes: normaliseCapabilities(projection.scopes),
+    grantId: p.grantId,
+    ownerPubkey: p.ownerPubkey,
+    scopes,
     frontier: {
-      maxClock: projection.frontier.maxClock, opCount: projection.frontier.opCount,
-      publishedAt: projection.frontier.publishedAt, deviceId: projection.frontier.deviceId,
+      maxClock: p.frontier.maxClock, opCount: p.frontier.opCount,
+      publishedAt: p.frontier.publishedAt, deviceId: p.frontier.deviceId,
     },
-    issuedAt: projection.issuedAt,
-    expiresAt: projection.expiresAt,
-    contacts: projection.contacts,
+    issuedAt: p.issuedAt,
+    expiresAt: p.expiresAt,
+    contacts,
   };
-  if (projection.revoked === true) body.revoked = true;
-  if (projection.truncated === true) body.truncated = true;
-  const json = JSON.stringify(body);
+  if (p.revoked === true) body.revoked = true;
+  if (p.truncated === true) body.truncated = true;
+  return body;
+}
+
+/**
+ * Serialise an EXPLICIT projection of the input, then prove it survives its
+ * own parser, then serialise AGAIN from the reparsed (canonical-order,
+ * undefined-free, deduped, capped) values — see the module header.
+ *
+ * I1: the wire body is built from the REPARSED contacts, never the caller's
+ * raw objects. Passing `projection.contacts` straight to `JSON.stringify`
+ * would make the output depend on the caller's object-literal key insertion
+ * order — two logically identical projections built from differently
+ * ordered literals would then produce different bytes, which breaks
+ * byte-identical hashing/dedupe and Task 12's frozen vectors. Rebuilding
+ * from `reparsed.contacts` (each contact reconstructed field-by-field by
+ * `parseProjectedContact`) gives one canonical order regardless of caller
+ * order, and closes any extra-field pass-through by construction — the
+ * reparsed object can only ever contain fields the parser itself put there.
+ */
+export function buildProjection(projection: ContactProjectionV2): string {
+  const draftJson = JSON.stringify(bodyOf(projection, projection.scopes, projection.contacts));
+
+  const reparsed = parseProjection(draftJson);
+  if (reparsed === null) throw new TypeError('signet-contacts: projection is not parseable');
+  if (reparsed.contacts.length !== projection.contacts.length) {
+    throw new TypeError('signet-contacts: projection would drop contacts in transit');
+  }
+  // I2: compare against the JSON-round-tripped form of the caller's own
+  // contacts, not the caller's raw objects. `JSON.stringify` already drops
+  // an explicitly-`undefined` optional field (e.g. a producer writing
+  // `{ roles: hasRoles ? roles : undefined }`), and comparing the reparsed
+  // form against the raw object would see an extra `roles` key on the raw
+  // side that never made it onto the wire at all — an entirely faithful
+  // build would then throw forever, with nothing logged to explain why (the
+  // exact silent-rail hazard R-6 exists to prevent).
+  const draftContacts = (JSON.parse(draftJson) as { contacts: unknown }).contacts;
+  if (!deepEqualJson(reparsed.contacts, draftContacts)) {
+    throw new TypeError('signet-contacts: projection would rewrite contact fields in transit');
+  }
+
+  const json = JSON.stringify(bodyOf(reparsed, reparsed.scopes, reparsed.contacts));
   // R-5: fail closed on an over-cap body. The producer is expected to have
   // fitted it already (signet-app's `buildContactProjection`); reaching here
   // means it did not, and sealing would throw somewhere nobody is looking.
@@ -235,38 +289,21 @@ export function buildProjection(projection: ContactProjectionV2): string {
   if (bytes > MAX_WIRE_BYTES) {
     throw new TypeError(`signet-contacts: projection is ${bytes} bytes, over the ${MAX_WIRE_BYTES} cap`);
   }
-
-  const reparsed = parseProjection(json);
-  if (reparsed === null) throw new TypeError('signet-contacts: projection is not parseable');
-  if (reparsed.contacts.length !== projection.contacts.length) {
-    throw new TypeError('signet-contacts: projection would drop contacts in transit');
-  }
-  if (!deepEqualJson(reparsed.contacts, projection.contacts)) {
-    throw new TypeError('signet-contacts: projection would rewrite contact fields in transit');
-  }
   return json;
 }
 
-/** UTF-8 byte length of the serialised body, so a producer can fit a
- *  projection BEFORE it builds one (R-5). Measured the same way the builder
- *  measures it, so "it fits" here means "it builds" there. */
+/** UTF-8 byte length of the CANONICAL serialised body, so a producer can fit
+ *  a projection BEFORE it builds one (R-5). Goes through the same
+ *  draft-then-reparse canonicalisation as `buildProjection` (I1) — measured
+ *  the same way the builder measures it, so "it fits" here means "it builds"
+ *  there, byte for byte. Falls back to measuring the draft when the input
+ *  cannot even parse — the producer gets the actual error from
+ *  `buildProjection`, this function only ever needs to answer "how big". */
 export function projectionByteLength(projection: ContactProjectionV2): number {
-  const body: Record<string, unknown> = {
-    v: 2,
-    grantId: projection.grantId,
-    ownerPubkey: projection.ownerPubkey,
-    scopes: normaliseCapabilities(projection.scopes),
-    frontier: {
-      maxClock: projection.frontier.maxClock, opCount: projection.frontier.opCount,
-      publishedAt: projection.frontier.publishedAt, deviceId: projection.frontier.deviceId,
-    },
-    issuedAt: projection.issuedAt,
-    expiresAt: projection.expiresAt,
-    contacts: projection.contacts,
-  };
-  if (projection.revoked === true) body.revoked = true;
-  if (projection.truncated === true) body.truncated = true;
-  return new TextEncoder().encode(JSON.stringify(body)).length;
+  const draftJson = JSON.stringify(bodyOf(projection, projection.scopes, projection.contacts));
+  const reparsed = parseProjection(draftJson);
+  if (reparsed === null) return new TextEncoder().encode(draftJson).length;
+  return new TextEncoder().encode(JSON.stringify(bodyOf(reparsed, reparsed.scopes, reparsed.contacts))).length;
 }
 
 export function projectionEventTemplate(

@@ -3,7 +3,10 @@ import {
   buildProjection, parseProjection, projectionByteLength, projectionEventTemplate, projectionFilter,
 } from './projection.js';
 import { projectionTag } from './ids.js';
-import { MAX_WIRE_BYTES, PROJECTION_KIND } from './constants.js';
+import {
+  MAX_CAPABILITIES, MAX_IDENTITIES_PER_CONTACT, MAX_LINKED_PUBKEYS,
+  MAX_METHODS_PER_CONTACT, MAX_WIRE_BYTES, PROJECTION_KIND,
+} from './constants.js';
 import type { ContactProjectionV2, ProjectedContact } from './types.js';
 
 const GRANT = 'f'.repeat(32);
@@ -34,7 +37,7 @@ function projection(over: Partial<ContactProjectionV2> = {}): ContactProjectionV
 }
 
 describe('buildProjection / parseProjection', () => {
-  it('round-trips a full projection byte-identically', () => {
+  it('round-trips a full projection', () => {
     const p = projection({
       contacts: [contact({
         avatar: { url: 'https://blossom.example/a', hash: 'c'.repeat(64), key: 'd'.repeat(64) },
@@ -45,6 +48,40 @@ describe('buildProjection / parseProjection', () => {
       scopes: ['signet.contacts.read:directory', 'signet.contacts.read:roles'],
     });
     expect(parseProjection(buildProjection(p))).toEqual(p);
+  });
+
+  it('produces byte-identical JSON regardless of caller key insertion order (I1)', () => {
+    const base = contact({
+      avatar: { url: 'https://blossom.example/a', hash: 'c'.repeat(64) },
+      roles: ['coach'],
+      contactMethods: [{ kind: 'email', value: 'sam@example.com', verification: 'unverified' }],
+      linkedPubkeys: ['e'.repeat(64)],
+    });
+    // Same values, deliberately different key insertion order.
+    const reordered: ProjectedContact = {
+      linkedPubkeys: base.linkedPubkeys,
+      blocked: base.blocked,
+      contactMethods: base.contactMethods,
+      tierSource: base.tierSource,
+      roles: base.roles,
+      effectiveTier: base.effectiveTier,
+      avatar: base.avatar,
+      displayName: base.displayName,
+      identities: base.identities,
+      type: base.type,
+      contactId: base.contactId,
+    };
+    const a = buildProjection(projection({ contacts: [base] }));
+    const b = buildProjection(projection({ contacts: [reordered] }));
+    expect(a).toBe(b);
+  });
+
+  it('does not throw when an optional contact field is explicitly undefined (I2)', () => {
+    const withUndefined = contact({ roles: undefined, avatar: undefined });
+    expect(() => buildProjection(projection({ contacts: [withUndefined] }))).not.toThrow();
+    const parsed = parseProjection(buildProjection(projection({ contacts: [withUndefined] })));
+    expect(parsed?.contacts[0]?.roles).toBeUndefined();
+    expect(parsed?.contacts[0]?.avatar).toBeUndefined();
   });
 
   it('round-trips a revocation with no contacts', () => {
@@ -131,6 +168,90 @@ describe('buildProjection / parseProjection', () => {
       contacts: [{ ...contact(), avatar: { url: 'https://x.example/a', hash: 'c'.repeat(64), key: 'nope' } }],
     });
     expect(parseProjection(withBadKey)?.contacts[0]?.avatar?.key).toBeUndefined();
+  });
+
+  it('strips fields outside the allowlist from a wire contact', () => {
+    const json = JSON.stringify({
+      ...projection(),
+      contacts: [{
+        ...contact(),
+        sharedSecret: 'topsecret',
+        notes: 'private notes',
+        itemId: 'internal-id',
+        actorPubkey: 'z'.repeat(64),
+        reason: 'because',
+      }],
+    });
+    const parsed = parseProjection(json);
+    expect(parsed?.contacts).toHaveLength(1);
+    const keys = Object.keys(parsed!.contacts[0] as object);
+    expect(keys).not.toContain('sharedSecret');
+    expect(keys).not.toContain('notes');
+    expect(keys).not.toContain('itemId');
+    expect(keys).not.toContain('actorPubkey');
+    expect(keys).not.toContain('reason');
+  });
+
+  it('caps identities, contact methods and linked pubkeys per contact on parse', () => {
+    const tooMany = {
+      ...contact(),
+      identities: Array.from({ length: MAX_IDENTITIES_PER_CONTACT + 4 }, (_, i) => (
+        { pubkey: i.toString(16).padStart(64, '0'), verification: 'proven' }
+      )),
+      contactMethods: Array.from({ length: MAX_METHODS_PER_CONTACT + 4 }, (_, i) => (
+        { kind: 'email', value: `a${i}@example.com`, verification: 'unverified' }
+      )),
+      linkedPubkeys: Array.from({ length: MAX_LINKED_PUBKEYS + 4 }, (_, i) => i.toString(16).padStart(64, '1')),
+    };
+    const json = JSON.stringify({ ...projection(), contacts: [tooMany] });
+    const parsed = parseProjection(json);
+    expect(parsed?.contacts[0]?.identities).toHaveLength(MAX_IDENTITIES_PER_CONTACT);
+    expect(parsed?.contacts[0]?.contactMethods).toHaveLength(MAX_METHODS_PER_CONTACT);
+    expect(parsed?.contacts[0]?.linkedPubkeys).toHaveLength(MAX_LINKED_PUBKEYS);
+  });
+
+  it('sanitises control/bidi characters in displayName and method values on parse', () => {
+    const poisoned = {
+      ...contact(),
+      displayName: 'Sam​‮ evil',
+      contactMethods: [{ kind: 'email', value: 'sam​@example.com', verification: 'unverified' }],
+    };
+    const json = JSON.stringify({ ...projection(), contacts: [poisoned] });
+    const parsed = parseProjection(json);
+    expect(parsed?.contacts[0]?.displayName).toBe('Sam evil');
+    expect(parsed?.contacts[0]?.contactMethods?.[0]?.value).toBe('sam@example.com');
+  });
+
+  it('drops a later duplicate contactId, keeping the first (M5)', () => {
+    const json = JSON.stringify({
+      ...projection(),
+      contacts: [contact({ displayName: 'First' }), contact({ displayName: 'Second' })],
+    });
+    const parsed = parseProjection(json);
+    expect(parsed?.contacts).toHaveLength(1);
+    expect(parsed?.contacts[0]?.displayName).toBe('First');
+  });
+
+  it('caps scopes before filtering (M3)', () => {
+    const scopes = Array.from({ length: MAX_CAPABILITIES + 10 }, (_, i) => (
+      i === MAX_CAPABILITIES + 5 ? 'signet.contacts.read:directory' : 'bogus'
+    ));
+    const json = JSON.stringify({ ...projection(), scopes });
+    expect(parseProjection(json)?.scopes).toEqual([]);
+  });
+
+  it('filters unknown scope strings', () => {
+    const json = JSON.stringify({
+      ...projection(),
+      scopes: ['signet.contacts.read:directory', 'signet.contacts.read:bogus', 'not-a-capability'],
+    });
+    expect(parseProjection(json)?.scopes).toEqual(['signet.contacts.read:directory']);
+  });
+
+  it('never throws on hostile contact nesting', () => {
+    const json = JSON.stringify({ ...projection(), contacts: [null, 1, 'x', { weird: true }] });
+    expect(() => parseProjection(json)).not.toThrow();
+    expect(parseProjection(json)?.contacts).toEqual([]);
   });
 });
 
