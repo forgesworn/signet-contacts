@@ -6,3 +6,4 @@ export * from './pairing.js';
 export * from './ack.js';
 export * from './projection.js';
 export * from './proposal.js';
+export * from './state.js';
