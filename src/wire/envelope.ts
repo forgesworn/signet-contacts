@@ -169,6 +169,11 @@ function unb64(s: string): Uint8Array<ArrayBuffer> {
   return Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
 }
 
+/** Strict lowercase 64-hex, same pattern as `isHex(x, 64)` in `ids.ts` (kept
+ *  local, and to this exact literal, so this file's crypto boundary reads no
+ *  differently from the app's own `LOWERCASE_HEX_64` guard it mirrors). */
+const LOWERCASE_HEX_64 = /^[0-9a-f]{64}$/;
+
 /**
  * Seal `plaintext` into a v2 envelope string, or null when it exceeds the top
  * bucket (or `opts.maxBucket`), or on any failure. The content key is wrapped
@@ -176,6 +181,14 @@ function unb64(s: string): Uint8Array<ArrayBuffer> {
  * always the APP's own pubkey (an app opens its own projections), but the
  * parameter is explicit rather than read off a connected backend, since the
  * SDK holds no notion of "our own pubkey" independent of the caller's signer.
+ *
+ * Residuals fix: `recipientPubkey` is checked as strict lowercase 64-hex
+ * BEFORE anything else — matching the app's own guard (Task 23,
+ * `vault-envelope.ts`'s `activePublicKeyHex` check). Wrapping a content key
+ * to `''`, an npub, or mixed-case hex would either throw out of a publish
+ * path whose contract is a `false`/`null` return, or silently address the
+ * envelope to a pubkey nothing can ever open — neither of which the caller
+ * should learn about only after paying for the padding and AES-GCM work.
  */
 export async function sealVaultPayload(
   plaintext: string,
@@ -183,6 +196,7 @@ export async function sealVaultPayload(
   recipientPubkey: string,
   opts: SealVaultOptions = {},
 ): Promise<string | null> {
+  if (!LOWERCASE_HEX_64.test(recipientPubkey)) return null;
   const padded = padToBucket(plaintext, opts.maxBucket ?? TOP_BUCKET);
   if (padded === null) return null;
   const random = opts.random ?? ((n: number) => crypto.getRandomValues(new Uint8Array(n)));

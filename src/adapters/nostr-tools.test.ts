@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { createSimplePoolRelayIo } from './nostr-tools.js';
+import type { SimplePoolLike } from './nostr-tools.js';
 import type { SignedNostrEvent } from '../wire/types.js';
 
 const EVENT: SignedNostrEvent = {
@@ -170,5 +171,30 @@ describe('createSimplePoolRelayIo', () => {
     await expect(io.fetchNewest({ kinds: [30078] }, ['ws://localhost:4869'])).resolves.toBeNull();
     await expect(io.fetchNewest({ kinds: [30078] }, ['ws://127.0.0.1:4869'])).resolves.toBeNull();
     await expect(io.fetchNewest({ kinds: [30078] }, ['wss://relay.example'])).resolves.toBeNull();
+  });
+
+  // Residuals fix #2: `SimplePoolLike` is structurally typed precisely so a
+  // caller isn't forced to import nostr-tools — a pool that satisfies the
+  // shape but resolves SYNCHRONOUSLY (a plain non-thenable return, not a
+  // real `Promise`) must not make `raceTimeout` reject or leak its timer.
+  it('never rejects, and clears the timer, when the pool returns a synchronous non-promise value', async () => {
+    vi.useFakeTimers();
+    try {
+      const syncPool: SimplePoolLike = {
+        // Cast is deliberate: this is exactly the "satisfies the shape but
+        // lies about being async" case the fix is for.
+        get: (() => EVENT) as unknown as SimplePoolLike['get'],
+        publish: (() => [EVENT.id]) as unknown as SimplePoolLike['publish'],
+        subscribeMany: () => ({ close() {} }),
+      };
+      const io = createSimplePoolRelayIo(syncPool, { timeoutMs: 5000 });
+      await expect(io.fetchNewest({ kinds: [30078] }, ['wss://r.example'], EVENT.pubkey))
+        .resolves.toEqual(EVENT);
+      expect(vi.getTimerCount()).toBe(0);
+      await expect(io.publish(EVENT, ['wss://r.example'])).resolves.toBe(true);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

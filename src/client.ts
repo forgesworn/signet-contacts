@@ -429,11 +429,22 @@ export function createSignetContactsClient(opts: {
             // projection (never `blockedPubkeys`, the one thing that must
             // stay sticky) recovers cleanly: the next real fetch is treated
             // like this grant's first.
-            const projection = parsed.projection === null || parsed.projection === undefined
+            const rawProjection = parsed.projection === null || parsed.projection === undefined
               ? null
               : parseProjection(JSON.stringify(parsed.projection));
+            // Residuals fix: pinned to the ARGUMENT `grantId`, never
+            // `parsed.grantId` — a stored row addressing a different grant
+            // (stale key reuse, a corrupted write, a future key-scheme bug)
+            // must not resurrect a projection under the wrong grant. Every
+            // later `fetchProjection(pairing)` compares its incoming
+            // projection's frontier against `state.projection` regardless of
+            // which grant `state.projection` actually belongs to — a
+            // mismatched one here would silently reject every future
+            // projection for THIS grant via `applyProjection`'s "not newer"
+            // check, wedging it shut without ever throwing.
+            const projection = parsed.grantId === grantId ? rawProjection : null;
             state = {
-              grantId: typeof parsed.grantId === 'string' ? parsed.grantId : grantId,
+              grantId,
               projection,
               receivedAt: typeof parsed.receivedAt === 'number' ? parsed.receivedAt : 0,
               blockedPubkeys: parsed.blockedPubkeys.filter((p): p is string => typeof p === 'string'),

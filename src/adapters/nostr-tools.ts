@@ -76,18 +76,27 @@ function assertValidRelays(relays: string[]): void {
 function raceTimeout<T>(factory: () => Promise<T>, ms: number): Promise<T | typeof TIMEOUT> {
   return new Promise((resolve) => {
     const timer = setTimeout(() => resolve(TIMEOUT), ms);
-    let settling: Promise<T>;
     try {
-      settling = factory();
+      // Residuals fix: `Promise.resolve(...)`, not a bare `.then` on
+      // whatever `factory()` returned. `factory`'s TYPE says `Promise<T>`,
+      // but a `SimplePoolLike` is structurally typed precisely so a caller
+      // can hand in anything satisfying the shape — including a pool whose
+      // `get`/publish entry resolves synchronously and returns a plain,
+      // non-thenable value. Calling `.then` directly on that would throw
+      // ("x.then is not a function"), and that throw happens OUTSIDE this
+      // `try` in the previous version, so it escaped as a rejection AND left
+      // `timer` running forever. `Promise.resolve` coerces any value —
+      // thenable or not — into a real promise first, so `.then` is always
+      // safe, and the whole thing stays inside this `try` as a second line
+      // of defence.
+      Promise.resolve(factory()).then(
+        (value) => { clearTimeout(timer); resolve(value); },
+        () => { clearTimeout(timer); resolve(TIMEOUT); },
+      );
     } catch {
       clearTimeout(timer);
       resolve(TIMEOUT);
-      return;
     }
-    settling.then(
-      (value) => { clearTimeout(timer); resolve(value); },
-      () => { clearTimeout(timer); resolve(TIMEOUT); },
-    );
   });
 }
 

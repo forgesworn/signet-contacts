@@ -229,6 +229,12 @@ describe('fetchProjection', () => {
   it('opens the sealed envelope, applies and exposes state', async () => {
     const signer = fakeSigner();
     const content = await sealProjection(signer, projection());
+    // Residuals fix #3: spy on the SAME object `createSignetContactsClient`
+    // receives, so this proves the SDK really unwraps `k` with
+    // `pairing.railPubkey`, not (say) `event.pubkey` — which happens to be
+    // the same value in every other fixture here, so a wrong wiring would
+    // pass every other test silently.
+    const decryptSpy = vi.spyOn(signer, 'nip44Decrypt');
     const client = createSignetContactsClient({
       signer,
       relay: {
@@ -241,6 +247,7 @@ describe('fetchProjection', () => {
     expect(p?.contacts).toHaveLength(1);
     expect(client.isFresh()).toBe(true);
     expect(client.getState().grantId).toBe(GRANT);
+    expect(decryptSpy).toHaveBeenCalledWith(RAIL, expect.any(String));
   });
 
   it('pins the rail author: an event from another key is ignored', async () => {
@@ -447,6 +454,41 @@ describe('load — stored-row validation (I2)', () => {
     // A corrupt stored projection must not wedge every later fetchProjection —
     // this grant's first REAL projection applies exactly as if it were new.
     const p = await client.fetchProjection(PAIRING);
+    expect(p?.contacts).toHaveLength(1);
+  });
+
+  // Residuals fix #1.
+  it('drops a stored projection whose grantId does not match the ARGUMENT grantId, pinning state to the argument', async () => {
+    const OTHER_GRANT = '9'.repeat(32);
+    const storage = createMemoryStorage();
+    // A row stored under OTHER_GRANT's key but whose payload actually
+    // belongs to GRANT (stale key reuse / a corrupted write) — `load` is
+    // called with OTHER_GRANT, so `parsed.grantId` disagrees with the
+    // argument.
+    await storage.set(STATE_KEY(OTHER_GRANT), JSON.stringify({
+      grantId: GRANT,
+      projection: projection(),
+      receivedAt: 1,
+      blockedPubkeys: [],
+      revoked: false,
+    }));
+    const signer = fakeSigner();
+    const otherPairing: PairingV2 = { ...PAIRING, grantId: OTHER_GRANT };
+    const content = await sealProjection(signer, projection({ grantId: OTHER_GRANT }));
+    const client = createSignetContactsClient({
+      signer, storage,
+      relay: { fetchNewest: async () => signed(projectionEventTemplate(RAIL, OTHER_GRANT, 1, content)), publish: async () => true },
+    });
+    const loaded = await client.load(OTHER_GRANT);
+    expect(loaded.grantId).toBe(OTHER_GRANT);
+    expect(loaded.projection).toBeNull();
+
+    // Not wedged: on the SAME client, a REAL projection for OTHER_GRANT
+    // applies cleanly. If the mismatched (GRANT-shaped) projection had been
+    // kept as `state.projection`, `applyProjection`'s frontier comparison
+    // would run this incoming OTHER_GRANT projection against a held
+    // projection that was never OTHER_GRANT's in the first place.
+    const p = await client.fetchProjection(otherPairing);
     expect(p?.contacts).toHaveLength(1);
   });
 });

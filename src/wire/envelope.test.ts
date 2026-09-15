@@ -126,6 +126,15 @@ describe('sealVaultPayload / openVaultPayload', () => {
     expect(await sealVaultPayload('z'.repeat(100), backend, RECIPIENT, { maxBucket: 4096 })).not.toBeNull();
   });
 
+  // Residuals fix #4, matching the app's Task 23 `activePublicKeyHex` guard.
+  it('refuses a recipientPubkey that is not strict lowercase 64-hex, without touching the backend', async () => {
+    for (const bad of ['', 'a'.repeat(63), 'a'.repeat(65), 'A'.repeat(64), 'z'.repeat(64), 'nostr:npub1x']) {
+      const backend = fakeBackend();
+      expect(await sealVaultPayload('refuse me', backend, bad)).toBeNull();
+      expect(backend.nip44Encrypt).not.toHaveBeenCalled();
+    }
+  });
+
   it('uses fresh content key material and IV per seal', async () => {
     const backend = fakeBackend();
     const first = parseVaultEnvelope((await sealVaultPayload('same', backend, RECIPIENT))!)!;
