@@ -1,0 +1,50 @@
+{
+  "description": "sanitizeWireText: the one sanitiser on this wire. Producer and parser must agree byte for byte.",
+  "maxLen": 100,
+  "pairs": [
+    {
+      "input": "  Sam  ",
+      "output": "Sam"
+    },
+    {
+      "input": "Ada‮eda",
+      "output": "Adaeda"
+    },
+    {
+      "input": "Ada​Bo",
+      "output": "AdaBo"
+    },
+    {
+      "input": "line\nbreak",
+      "output": "linebreak"
+    },
+    {
+      "input": "tab\tted",
+      "output": "tabted"
+    },
+    {
+      "input": " ",
+      "output": ""
+    },
+    {
+      "input": "⁦isolate⁩",
+      "output": "isolate"
+    },
+    {
+      "input": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      "output": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+    },
+    {
+      "input": "",
+      "output": ""
+    },
+    {
+      "input": "   ",
+      "output": ""
+    },
+    {
+      "input": "🜂 sigil",
+      "output": "🜂 sigil"
+    }
+  ]
+}

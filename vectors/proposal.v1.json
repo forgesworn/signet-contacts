@@ -1,0 +1,39 @@
+{
+  "description": "Proposal batch carrying one add-ken and one rename-app-label",
+  "batch": {
+    "plaintext": "{\"v\":1,\"proposals\":[{\"v\":1,\"grantId\":\"ffffffffffffffffffffffffffffffff\",\"operationId\":\"99999999999999999999999999999999\",\"action\":\"add-ken\",\"value\":{\"pubkey\":\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"displayName\":\"Ada\"},\"createdAt\":1700000000},{\"v\":1,\"grantId\":\"ffffffffffffffffffffffffffffffff\",\"operationId\":\"88888888888888888888888888888888\",\"action\":\"rename-app-label\",\"value\":{\"contactId\":\"13993eeedd697109d6e61088138dc959\",\"label\":\"Coach\",\"updatedAt\":1700000000000},\"createdAt\":1700000000}]}",
+    "parsed": {
+      "v": 1,
+      "proposals": [
+        {
+          "v": 1,
+          "grantId": "ffffffffffffffffffffffffffffffff",
+          "operationId": "99999999999999999999999999999999",
+          "action": "add-ken",
+          "value": {
+            "pubkey": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+            "displayName": "Ada"
+          },
+          "createdAt": 1700000000
+        },
+        {
+          "v": 1,
+          "grantId": "ffffffffffffffffffffffffffffffff",
+          "operationId": "88888888888888888888888888888888",
+          "action": "rename-app-label",
+          "value": {
+            "contactId": "13993eeedd697109d6e61088138dc959",
+            "label": "Coach",
+            "updatedAt": 1700000000000
+          },
+          "createdAt": 1700000000
+        }
+      ]
+    }
+  },
+  "malformed": [
+    "{\"v\":2,\"proposals\":[]}",
+    "{\"v\":1}",
+    "{\"v\":1,\"proposals\":[{\"v\":1,\"grantId\":\"ffffffffffffffffffffffffffffffff\",\"operationId\":\"short\",\"action\":\"add-ken\",\"value\":{\"pubkey\":\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"displayName\":\"Ada\"},\"createdAt\":1700000000}]}"
+  ]
+}

@@ -1,2 +1,11 @@
-// Stub for Task 1 — replaced with the real vector-conformance check in Task 12.
-process.exit(0);
+// Re-runs the vector test WITHOUT the write flag. The test asserts each file
+// byte-for-byte, so any wire change that did not come with a deliberate
+// regeneration fails here rather than shipping.
+import { spawnSync } from 'node:child_process';
+
+const result = spawnSync(
+  process.execPath,
+  ['node_modules/vitest/vitest.mjs', 'run', 'src/wire/vectors.test.ts'],
+  { stdio: 'inherit', env: { ...process.env, WRITE_VECTORS: '' } },
+);
+process.exit(result.status ?? 1);
