@@ -35,6 +35,11 @@ describe('buildPairingAckV2 / parsePairingAckV2', () => {
     expect(parsePairingAckV2(buildPairingAckV2({ ...ACK, railPubkey: 'short' }), CHALLENGE)).toBeNull();
     expect(parsePairingAckV2(buildPairingAckV2({ ...ACK, projectionTag: 'nope' }), CHALLENGE)).toBeNull();
     expect(parsePairingAckV2(buildPairingAckV2({ ...ACK, relay: 'http://x.example' }), CHALLENGE)).toBeNull();
+    // C-I7: the same 256-character cap the pairing URI enforces. An ack is the
+    // one place a relay URL enters a consumer's own storage.
+    expect(parsePairingAckV2(
+      buildPairingAckV2({ ...ACK, relay: `wss://${'a'.repeat(300)}.example` }), CHALLENGE,
+    )).toBeNull();
   });
 
   it('rejects non-JSON and a JSON array', () => {

@@ -131,6 +131,34 @@ export const MAX_METHOD_VALUE = 320;
 export const MAX_URL_LEN = 512;
 export const MAX_PROPOSALS_PER_BATCH = 50;
 
+/**
+ * C-I7: `relay` and `challenge` were the only two fields on this wire with no
+ * upper bound, and both cross into somebody's storage.
+ *
+ * 256 is signet-app's own `MAX_RELAY_LEN` on the grants rail. A pairing whose
+ * relay is longer than that is accepted by a lenient parser and then DROPPED
+ * from the owner's sealed grant backup, so the grant works on the device that
+ * approved it and silently never reaches a second one. Matching the producer's
+ * cap is what stops the two sides disagreeing about which pairings exist.
+ *
+ * A challenge is exactly 32 hex characters — 128 bits, the same width as every
+ * other random identifier here (`randomHex(16)`), which is what both this SDK
+ * and signet-app emit. It is the consumer's own anti-replay nonce and is
+ * echoed byte-for-byte, so accepting an arbitrary-length one bought nothing
+ * and let a caller mint a 4-character "nonce" or a megabyte of hex.
+ *
+ * Both are HARD failures, never truncations: a truncated relay URL is a
+ * different relay, and a truncated nonce is a weaker one.
+ */
+export const MAX_RELAY_LEN = 256;
+export const CHALLENGE_HEX_CHARS = 32;
+
+/** Ceiling on the raw pairing URI a parser will even look at. Every field
+ *  inside it is capped, so a well-formed v2 URI is comfortably under 1 kB;
+ *  anything past this is not a pairing request, and is refused before the
+ *  query string is parsed at all. */
+export const MAX_PAIRING_URI_CHARS = 2048;
+
 /** Clamp a requested staleness window into the permitted band. Anything that
  *  is not a finite positive integer resolves to the default rather than 0 —
  *  a zero window would expire every projection the instant it was issued. */

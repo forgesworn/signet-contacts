@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { buildPairingUriV2, parsePairingRequestV2, isValidContactsRelayUrl } from './pairing.js';
-import { CAPABILITIES } from './constants.js';
+import { CAPABILITIES, CHALLENGE_HEX_CHARS, MAX_PAIRING_URI_CHARS, MAX_RELAY_LEN } from './constants.js';
 
 const NOW = 1_700_000_000;
 const BASE = {
@@ -40,6 +40,48 @@ describe('buildPairingUriV2', () => {
     // rather than silently lowercased. Contrast with parsePairingRequestV2 below,
     // which accepts and lowercases an upper-case pubkey on read.
     expect(() => buildPairingUriV2({ ...BASE, appPubkey: BASE.appPubkey.toUpperCase() })).toThrow(TypeError);
+  });
+});
+
+// C-I7: `relay` and `challenge` were the two fields on this wire with no upper
+// bound, and signet-app's own grants rail caps a relay at 256 characters — so
+// a pairing this parser accepted could mint a grant that worked on one device
+// and silently failed to reach the owner's second one. Over-bound is a parse
+// failure, never a truncation: a truncated relay URL is a different relay.
+describe('parser bounds on relay, challenge and raw input (C-I7)', () => {
+  it('refuses a relay URL longer than MAX_RELAY_LEN, on the way out and the way in', () => {
+    const longRelay = `wss://${'a'.repeat(MAX_RELAY_LEN)}.example`;
+    expect(longRelay.length).toBeGreaterThan(MAX_RELAY_LEN);
+    expect(isValidContactsRelayUrl(longRelay)).toBe(false);
+    expect(() => buildPairingUriV2({ ...BASE, relay: longRelay })).toThrow(TypeError);
+    const uri = buildPairingUriV2(BASE).replace(
+      encodeURIComponent(BASE.relay), encodeURIComponent(longRelay),
+    );
+    expect(parsePairingRequestV2(uri, { nowSec: NOW }).warnings).toContain('bad-relay');
+    expect(parsePairingRequestV2(uri, { nowSec: NOW }).request).toBeNull();
+  });
+
+  it('accepts a relay exactly at the cap', () => {
+    const prefix = 'wss://';
+    const exact = prefix + 'a'.repeat(MAX_RELAY_LEN - prefix.length);
+    expect(exact).toHaveLength(MAX_RELAY_LEN);
+    expect(isValidContactsRelayUrl(exact)).toBe(true);
+  });
+
+  it('requires a challenge of exactly CHALLENGE_HEX_CHARS hex characters', () => {
+    expect(() => buildPairingUriV2({ ...BASE, challenge: 'a'.repeat(16) })).toThrow(TypeError);
+    expect(() => buildPairingUriV2({ ...BASE, challenge: 'a'.repeat(64) })).toThrow(TypeError);
+    expect(() => buildPairingUriV2({ ...BASE, challenge: 'z'.repeat(CHALLENGE_HEX_CHARS) })).toThrow(TypeError);
+    expect(() => buildPairingUriV2({ ...BASE, challenge: 'A'.repeat(CHALLENGE_HEX_CHARS) })).not.toThrow();
+    const short = buildPairingUriV2(BASE).replace(BASE.challenge, 'a'.repeat(16));
+    expect(parsePairingRequestV2(short, { nowSec: NOW })).toEqual({ request: null, warnings: ['bad-challenge'] });
+    const long = buildPairingUriV2(BASE).replace(BASE.challenge, 'a'.repeat(64));
+    expect(parsePairingRequestV2(long, { nowSec: NOW })).toEqual({ request: null, warnings: ['bad-challenge'] });
+  });
+
+  it('refuses an input longer than MAX_PAIRING_URI_CHARS without parsing it', () => {
+    const padded = `${buildPairingUriV2(BASE)}&pad=${'x'.repeat(MAX_PAIRING_URI_CHARS)}`;
+    expect(parsePairingRequestV2(padded, { nowSec: NOW })).toEqual({ request: null, warnings: ['too-long'] });
   });
 });
 

@@ -10,19 +10,27 @@
  * Parameter order is binding — vectors pin the exact string.
  */
 import {
-  MAX_APP_NAME, MAX_CAPABILITIES, PAIRING_FRESHNESS_SECONDS,
-  PAIRING_SCHEME, PAIRING_VERSION, isCapability, normaliseCapabilities,
+  CHALLENGE_HEX_CHARS, MAX_APP_NAME, MAX_CAPABILITIES, MAX_PAIRING_URI_CHARS,
+  MAX_RELAY_LEN, PAIRING_FRESHNESS_SECONDS, PAIRING_SCHEME, PAIRING_VERSION,
+  isCapability, normaliseCapabilities,
 } from './constants.js';
 import type { Capability } from './constants.js';
 import type { DirectoryKind, PairingRequestV2, PairingRequestV2Result, PairingUriOptionsV2 } from './types.js';
 import { sanitizeWireText } from './ids.js';
 
 const HEX64 = /^[0-9a-f]{64}$/;
-const CHALLENGE_HEX = /^[0-9a-f]{16,}$/i;
+/** Exactly `CHALLENGE_HEX_CHARS` hex characters — see the constant for why the
+ *  old open-ended `{16,}` was a bound in name only. Case-insensitive on the
+ *  way in, preserved verbatim on the way out. */
+const CHALLENGE_HEX = new RegExp(`^[0-9a-f]{${CHALLENGE_HEX_CHARS}}$`, 'i');
 const DIRECTORIES: readonly DirectoryKind[] = ['owner', 'dependant'];
 
-/** Production relays require TLS; plaintext is reserved for loopback development. */
+/** Production relays require TLS; plaintext is reserved for loopback
+ *  development. Capped at `MAX_RELAY_LEN` (C-I7), matching signet-app's own
+ *  storage bound — a relay URL this accepts and the producer later drops would
+ *  make a grant work on one device and vanish on the next. */
 export function isValidContactsRelayUrl(value: string): boolean {
+  if (typeof value !== 'string' || value.length === 0 || value.length > MAX_RELAY_LEN) return false;
   return /^wss:\/\//i.test(value) || /^ws:\/\/(localhost|127\.0\.0\.1)([:/]|$)/i.test(value);
 }
 
@@ -52,6 +60,12 @@ export function parsePairingRequestV2(
   opts: { nowSec?: number; freshnessSeconds?: number } = {},
 ): PairingRequestV2Result {
   const warnings: string[] = [];
+  // Bounded before anything is parsed: every field inside a v2 URI is capped,
+  // so a longer input is not a pairing request and must not buy the work of
+  // decoding one.
+  if (typeof input !== 'string' || input.length > MAX_PAIRING_URI_CHARS) {
+    return { request: null, warnings: ['too-long'] };
+  }
   let params: URLSearchParams;
   try {
     const qIndex = input.indexOf('?');

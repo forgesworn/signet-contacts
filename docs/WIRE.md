@@ -71,15 +71,21 @@ the ack. Parameter order is **binding** — `vectors/pairing.v2.json` pins the
 exact string byte-for-byte:
 
 ```
-signet-grant://pair?v=2&app=<64-hex>&name=<sanitised, ≤64 chars>&caps=<comma-separated capability tokens>&dir=owner|dependant&relay=<wss://…>&t=<unix seconds>&challenge=<≥16 hex chars>
+signet-grant://pair?v=2&app=<64-hex>&name=<sanitised, ≤64 chars>&caps=<comma-separated capability tokens>&dir=owner|dependant&relay=<wss://…, ≤256 chars>&t=<unix seconds>&challenge=<exactly 32 hex chars>
 ```
 
-`v` must be the literal string `2` and is checked first: a parser that read a
+The whole URI is refused above `MAX_PAIRING_URI_CHARS` (2048) before its query
+string is parsed. `v` must be the literal string `2` and is checked first: a parser that read a
 `v=1` Kenspeckle URI as v2 would silently grant capabilities never asked for,
 so a wrong or missing `v` is a hard rejection, not a default. `t` must be
 within `PAIRING_FRESHNESS_SECONDS` (300s) of the reader's clock. `challenge` is
-compared byte-for-byte, case preserved, on the way back in the ack — it is the
-app's own anti-replay nonce.
+exactly `CHALLENGE_HEX_CHARS` (32) hex characters — 128 bits, the width every
+random identifier on this wire uses — validated case-insensitively and compared
+byte-for-byte, case preserved, on the way back in the ack: it is the app's own
+anti-replay nonce. `relay` is at most `MAX_RELAY_LEN` (256) characters as well
+as `wss://` (or loopback `ws://`). Both are hard rejections, never
+truncations — a truncated relay URL is a different relay, and a truncated nonce
+is a weaker one.
 
 ### Ack delivery — several candidates, never one (I3)
 
@@ -288,6 +294,17 @@ capability later is additive, not a breaking change.
   should surface it as "this list may be incomplete".
 - **`MAX_PROPOSALS_PER_BATCH = 50`** — the most proposals one signed batch may
   carry; `buildProposalBatch` throws above it.
+- **`MAX_RELAY_LEN = 256`** — on the pairing URI's `relay` and the ack's
+  `relay` alike. It matches signet-app's own storage bound: a longer relay URL
+  is dropped from the owner's sealed grant backup, so a pairing accepted above
+  this cap would work on the device that approved it and never reach a second
+  one.
+- **`CHALLENGE_HEX_CHARS = 32`** — the pairing challenge is exactly 32 hex
+  characters.
+- **`MAX_PAIRING_URI_CHARS = 2048`** — the raw pairing URI a parser will look
+  at.
+- **`ACK_CANDIDATE_LIMIT = 10`** — ack candidates a consumer considers per
+  poll (§3).
 
 ## 9. Vectors
 

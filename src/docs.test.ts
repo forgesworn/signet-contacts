@@ -1,8 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import {
-  ACK_CANDIDATE_LIMIT, CAPABILITIES, CAPABILITY_DESCRIPTIONS,
-  MAX_PROPOSALS_PER_BATCH, MAX_WIRE_BYTES,
+  ACK_CANDIDATE_LIMIT, CAPABILITIES, CAPABILITY_DESCRIPTIONS, CHALLENGE_HEX_CHARS,
+  MAX_PAIRING_URI_CHARS, MAX_PROPOSALS_PER_BATCH, MAX_RELAY_LEN, MAX_WIRE_BYTES,
 } from './wire/constants.js';
 import { DEFAULT_LIVE_POLL_MS } from './client.js';
 
@@ -33,6 +33,13 @@ describe('docs/WIRE.md', () => {
   it('states the hard limits', () => {
     expect(wire).toContain(String(MAX_WIRE_BYTES));
     expect(wire).toContain(String(MAX_PROPOSALS_PER_BATCH));
+    // C-I7: the two fields that used to have no upper bound, and the raw-input
+    // cap. A number documented nowhere is a number an independent
+    // implementation will not enforce.
+    expect(wire).toContain(`MAX_RELAY_LEN = ${MAX_RELAY_LEN}`);
+    expect(wire).toContain(`CHALLENGE_HEX_CHARS = ${CHALLENGE_HEX_CHARS}`);
+    expect(wire).toContain(`MAX_PAIRING_URI_CHARS = ${MAX_PAIRING_URI_CHARS}`);
+    expect(wire).toContain(`ACK_CANDIDATE_LIMIT = ${ACK_CANDIDATE_LIMIT}`);
   });
 
   // R-31: the owner's persona pubkey is not on this wire, and no document may

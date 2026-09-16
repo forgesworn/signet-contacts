@@ -52,3 +52,12 @@ described as "Add contacts to your Ken list (recognised only, no access)" —
 never "ask you to add", which described an owner decision the producer does not
 make. `read:directory` also now names linked pubkeys, which every projected
 contact carries.
+
+**Bounds: `relay`, `challenge` and the raw pairing URI are capped in the
+parsers (C-I7).** A relay URL is at most 256 characters (`MAX_RELAY_LEN`,
+matching signet-app's own storage bound, so a pairing this SDK accepts can
+never produce a grant that fails to sync to the owner's second device) as well
+as `wss://`-or-loopback; a challenge is exactly 32 hex characters
+(`CHALLENGE_HEX_CHARS`, replacing an open-ended `{16,}`); a pairing URI over
+`MAX_PAIRING_URI_CHARS` (2048) is refused before its query string is parsed.
+All three are hard parse failures, never silent truncations.
