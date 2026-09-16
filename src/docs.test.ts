@@ -211,8 +211,11 @@ describe('docs/INTEGRATION.md and SECURITY.md', () => {
 
   it('keeps the threat model to roughly a dozen lines', () => {
     const bullets = security.split('\n').filter((l) => l.trim().startsWith('-'));
+    // Short enough to read in one sitting is the actual requirement; the
+    // upper bound moved from 14 to 18 when S4, S5 and S9 were named rather
+    // than left implicit.
     expect(bullets.length).toBeGreaterThanOrEqual(10);
-    expect(bullets.length).toBeLessThanOrEqual(14);
+    expect(bullets.length).toBeLessThanOrEqual(18);
   });
 
   // C-C1: SECURITY.md claimed the rail key is all an app sees while the
@@ -222,6 +225,20 @@ describe('docs/INTEGRATION.md and SECURITY.md', () => {
     expect(security).toMatch(/persona pubkey/i);
     expect(security).toContain('R-31');
     expect(security).toMatch(/rail key, and only the rail key/);
+  });
+
+  it('names the advisory-freshness, revocation-reach and rendezvous-relay acceptances (S4, S5, S9)', () => {
+    expect(security).toContain('**S4');
+    expect(security).toContain('**S5');
+    expect(security).toContain('**S9');
+    expect(security).toMatch(/advisory/i);
+    expect(security).toContain('MAX_STALENESS_SECONDS');
+    expect(security).toMatch(/rendezvous relay is chosen by the app/i);
+  });
+
+  it('cross-references SECURITY.md by its S-labels, never by a section number', () => {
+    expect(wire).not.toMatch(/§\s*\d+\s*of `SECURITY\.md`/);
+    expect(wire).toContain('S7 in `SECURITY.md`');
   });
 
   it('states the author-pin reasoning and the timing trade-off (S7, S8)', () => {

@@ -115,7 +115,13 @@ export function parsePairingRequestV2(
   const rawName = params.get('name') ?? '';
   const appName = sanitizeWireText(rawName, MAX_APP_NAME);
   if (appName.length === 0) return { request: null, warnings: [...warnings, 'bad-app-name'] };
-  if (sanitizeWireText(rawName, MAX_APP_NAME + 1).length > MAX_APP_NAME) warnings.push('name-truncated');
+  // Counted by CODE POINT, the way `sanitizeWireText` truncates. `.length` is
+  // UTF-16 units, so an astral character (an emoji, a sigil) counted twice and
+  // a name that exactly filled the cap was reported truncated when nothing had
+  // been dropped — a warning the consumer would pass on to the owner as "we
+  // cut your app name".
+  const oneOver = Array.from(sanitizeWireText(rawName, MAX_APP_NAME + 1)).length;
+  if (oneOver > MAX_APP_NAME) warnings.push('name-truncated');
 
   return {
     request: { v: 2, appPubkey, appName, capabilities, directory, rendezvousRelay, t, challenge },

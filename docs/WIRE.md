@@ -58,7 +58,7 @@ Both replaceable kind-30078 events carry no `#p` tag on purpose: the recipient
 of a projection, and the size of the directory behind it, both stay off the
 wire (Kenspeckle v1 precedent). Only the ack — addressed to a specific app so
 it can find it — carries a `p` tag, and it is discarded (an ephemeral key is
-never author-pinnable; see §6 of `SECURITY.md`).
+never author-pinnable; see S7 in `SECURITY.md`).
 
 Only the projection goes through the vault envelope of §1. The ack and the
 proposal are ordinary NIP-44 payloads.

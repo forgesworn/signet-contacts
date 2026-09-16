@@ -1,6 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import { buildPairingUriV2, parsePairingRequestV2, isValidContactsRelayUrl } from './pairing.js';
-import { CAPABILITIES, CHALLENGE_HEX_CHARS, MAX_PAIRING_URI_CHARS, MAX_RELAY_LEN } from './constants.js';
+import {
+  CAPABILITIES, CHALLENGE_HEX_CHARS, MAX_APP_NAME, MAX_PAIRING_URI_CHARS, MAX_RELAY_LEN,
+} from './constants.js';
 
 const NOW = 1_700_000_000;
 const BASE = {
@@ -48,6 +50,37 @@ describe('buildPairingUriV2', () => {
 // a pairing this parser accepted could mint a grant that worked on one device
 // and silently failed to reach the owner's second one. Over-bound is a parse
 // failure, never a truncation: a truncated relay URL is a different relay.
+// `sanitizeWireText` truncates by CODE POINT, so the check for "was this name
+// truncated?" has to count the same way. Counting UTF-16 units made every
+// astral character (an emoji, a sigil) look like two characters, so a name
+// well inside the cap was reported truncated — and a consumer reading
+// `warnings` would tell the owner their app name had been cut when it had not.
+describe('name-truncated is decided by code point, like the truncation itself', () => {
+  const astralName = '\u{1F702}'.repeat(MAX_APP_NAME);   // MAX_APP_NAME code points, twice that in UTF-16 units
+
+  it('does not report truncation for a name that exactly fills the cap in code points', () => {
+    expect(Array.from(astralName)).toHaveLength(MAX_APP_NAME);
+    expect(astralName.length).toBe(MAX_APP_NAME * 2);
+    const { request, warnings } = parsePairingRequestV2(
+      buildPairingUriV2({ ...BASE, appName: astralName }), { nowSec: NOW },
+    );
+    expect(warnings).not.toContain('name-truncated');
+    expect(Array.from(request?.appName ?? '')).toHaveLength(MAX_APP_NAME);
+  });
+
+  it('still reports truncation when a code point really was dropped', () => {
+    const overLong = `${astralName}\u{1F703}`;
+    const { request, warnings } = parsePairingRequestV2(
+      buildPairingUriV2({ ...BASE, appName: overLong }), { nowSec: NOW },
+    );
+    expect(warnings).toContain('name-truncated');
+    expect(Array.from(request?.appName ?? '')).toHaveLength(MAX_APP_NAME);
+    // Never a split surrogate pair: the truncation itself is code-point safe.
+    const withoutPairs = (request?.appName ?? '').replace(/[\uD800-\uDBFF][\uDC00-\uDFFF]/g, '');
+    expect(/[\uD800-\uDFFF]/.test(withoutPairs)).toBe(false);
+  });
+});
+
 describe('parser bounds on relay, challenge and raw input (C-I7)', () => {
   it('refuses a relay URL longer than MAX_RELAY_LEN, on the way out and the way in', () => {
     const longRelay = `wss://${'a'.repeat(MAX_RELAY_LEN)}.example`;

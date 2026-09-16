@@ -56,12 +56,34 @@ this wire cannot promise no matter how it is implemented.
   the Schnorr signature itself. The real gate is the NIP-44 decrypt that
   follows: a relay is free to forge a `pubkey` on a fabricated event, and the
   only thing that buys it is one failed decrypt.
+- **S4 — freshness is advisory, and enforced only by the consumer.**
+  `expiresAt` is a value the producer wrote and `isFresh` is a check the
+  consuming app chooses to make; nothing stops an app that ignores it from
+  keeping a directory indefinitely. The wire cannot take a projection back, so
+  the staleness window is a promise about how often the producer refreshes, not
+  a permission that lapses.
+- **S5 — a revocation reaches an app only when that app next reads.** The
+  owner's device stamps the grant revoked locally whether or not the relay
+  accepted the tombstone, which is the right local-authority choice: a failed
+  publish must not leave a grant live. The residual is on the consumer's side.
+  A client running `start()` sees the tombstone within seconds; one that is
+  offline, or that only fetches at launch, keeps a valid-looking directory
+  until its own projection expires — up to `MAX_STALENESS_SECONDS` (7 days) in
+  the worst case. "Disconnected" on the owner's screen therefore means "no
+  further updates, and no further reads once its copy expires", not "erased".
 - **S8 — timing trade-off.** The rail pubkey IS on the wire, as `event.pubkey`,
   and the app learns it from the ack. A relay colluding with the app it serves
   can therefore watch that grant's publish cadence. This is the accepted
   per-app-channel timing trade-off (exploration §5.1): a separate rail per app
   buys unlinkability *between* apps at the cost of one relay being able to
   time a single app's own channel.
+- **S9 — the rendezvous relay is chosen by the app being paired.** The pairing
+  URI names the relay the ack is published to, so approving a grant makes the
+  owner's device dial a host the requesting app picked; it is validated for
+  scheme and length, not for who runs it. This is the same posture as the
+  shipped v1 companion rail, and is accepted: pairing needs a meeting point
+  both sides can reach, the ack is sealed to the app's own key and signed by a
+  throwaway one, and nothing about the owner's identity is on that leg.
 - The `railSecretKey`/`appSecretKey` values committed in
   `vectors/envelope.v2.json` are fixed **test keys only**, generated once for a
   reproducible fixture — never reuse them for anything real.
