@@ -5,6 +5,26 @@ import {
   MAX_STALENESS_SECONDS, MAX_WIRE_BYTES, MAX_PROPOSALS_PER_BATCH, isCapability, clampStaleness,
 } from './constants.js';
 
+// R-28(d): the description of a capability must say what the producer DOES,
+// not what a reviewer might wish it did. `propose:add-ken` is auto-applied by
+// signet-app the moment the batch validates — there is no queue, no prompt and
+// no owner decision — so describing it as a request the owner answers made the
+// approval screen's consent false. A1(M1): `linkedPubkeys` rides every
+// projected contact, so `read:directory` names it too.
+describe('capability descriptions say what happens (R-28d)', () => {
+  it('describes add-ken as adding contacts, never as asking', () => {
+    const addKen = CAPABILITY_DESCRIPTIONS['signet.contacts.propose:add-ken'];
+    expect(addKen).toContain('Add contacts to your Ken list (recognised only, no access)');
+    expect(addKen).not.toMatch(/ask/i);
+    expect(addKen).not.toMatch(/may accept|approve|propose/i);
+  });
+
+  it('names linked keys wherever they are actually carried', () => {
+    expect(CAPABILITY_DESCRIPTIONS['signet.contacts.read:directory']).toMatch(/linked/i);
+    expect(CAPABILITY_DESCRIPTIONS['signet.contacts.blocks.read']).toMatch(/linked/i);
+  });
+});
+
 describe('capability list', () => {
   it('is the six v2 capabilities, in a frozen order', () => {
     expect(CAPABILITIES).toEqual([

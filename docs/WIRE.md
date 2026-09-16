@@ -236,12 +236,24 @@ producer-side id.
 
 | Token | Description | Fields it unlocks |
 |---|---|---|
-| `signet.contacts.read:directory` | Read the directory: contact ids, type, display name, tier, tier source and identity pubkeys. | `contactId`, `type`, `displayName`, `effectiveTier`, `tierSource`, `identities` |
+| `signet.contacts.read:directory` | Read the directory: contact ids, type, display name, tier, tier source, identity pubkeys and linked pubkeys. | `contactId`, `type`, `displayName`, `effectiveTier`, `tierSource`, `identities`, `linkedPubkeys` |
 | `signet.contacts.read:methods` | Read contact methods whose sharingPolicy is grantable (phone, email, website, postal address). | `contactMethods` |
 | `signet.contacts.read:roles` | Read the owner-assigned role labels on each contact. | `roles` |
 | `signet.contacts.blocks.read` | Read blocked contacts, including their identity and linked pubkeys, so the app can filter them. | `blocked`, plus `identities`/`linkedPubkeys` on a blocked contact (S9 — identity keys come with it) |
-| `signet.contacts.propose:add-ken` | Propose an add-ken operation: a pubkey and a display name the owner may accept as a Ken contact. | unlocks `client.propose` with an `add-ken` draft |
+| `signet.contacts.propose:add-ken` | Add contacts to your Ken list (recognised only, no access). | unlocks `client.propose` with an `add-ken` draft |
 | `signet.contacts.propose:rename-app-label` | Propose a rename that applies only inside this grant’s own projection. | unlocks `client.propose` with a `rename-app-label` draft |
+
+`propose:add-ken` is named for the channel it uses, not for a review step:
+signet-app applies a valid `add-ken` as soon as the batch validates, so the app
+ADDS the contact rather than asking the owner to. It lands at Ken — a key the
+owner recognises — which grants nothing by itself; the producer caps what an
+app-authored contact can reach and drops app-created records first when a
+projection has to be truncated, so app volume cannot evict the owner's real
+contacts. Do not describe this capability to a person as "ask you to add".
+
+`linkedPubkeys` is carried on every projected contact the producer emits,
+including one projected at blocks-only scope, which is why `read:directory`
+names it as well as `blocks.read`.
 
 There is deliberately no *read-avatar* capability in v2 (ruling R-12): a
 capability that grants a field the producer cannot yet fill is a promise the

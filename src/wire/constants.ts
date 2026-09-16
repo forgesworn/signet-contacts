@@ -79,15 +79,19 @@ export function normaliseCapabilities(input: readonly Capability[]): Capability[
  */
 export const CAPABILITY_DESCRIPTIONS: Record<Capability, string> = {
   'signet.contacts.read:directory':
-    'Read the directory: contact ids, type, display name, tier, tier source and identity pubkeys.',
+    'Read the directory: contact ids, type, display name, tier, tier source, identity pubkeys and linked pubkeys.',
   'signet.contacts.read:methods':
     'Read contact methods whose sharingPolicy is grantable (phone, email, website, postal address).',
   'signet.contacts.read:roles':
     'Read the owner-assigned role labels on each contact.',
   'signet.contacts.blocks.read':
     'Read blocked contacts, including their identity and linked pubkeys, so the app can filter them.',
+  // R-28(d): signet-app applies an add-ken as soon as the batch validates —
+  // there is no queue, no prompt, no owner decision. Describing it as a
+  // request the owner answers made the consent false, so it says what happens:
+  // the app adds the contact, at the weakest distance the model has.
   'signet.contacts.propose:add-ken':
-    'Propose an add-ken operation: a pubkey and a display name the owner may accept as a Ken contact.',
+    'Add contacts to your Ken list (recognised only, no access).',
   'signet.contacts.propose:rename-app-label':
     'Propose a rename that applies only inside this grant’s own projection.',
 };

@@ -46,3 +46,9 @@ path and the fetch path alike, exactly once. `client.stop()` unsubscribes and
 clears the poll, and is idempotent. Previously `RelayIo.subscribe` was declared
 and implemented but never called, so a consumer that wired `onRevoked` and
 waited learned nothing until it happened to fetch again.
+
+**Copy: `propose:add-ken` says what it does (R-28d).** The capability is
+described as "Add contacts to your Ken list (recognised only, no access)" —
+never "ask you to add", which described an owner decision the producer does not
+make. `read:directory` also now names linked pubkeys, which every projected
+contact carries.
