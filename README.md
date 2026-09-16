@@ -72,6 +72,15 @@ Persist `pairing` yourself (it is a plain object) so the app can call
 `client.load(pairing.grantId)` and `client.fetchProjection(pairing)` again on
 the next launch without re-pairing.
 
+## Staying current — live, with polling as the fallback
+
+`client.start(pairing)` subscribes to the grant's projection slot and polls
+every `pollMs` (default 60 000 ms) as a fallback, so a new projection and a
+revocation tombstone both arrive without the app asking; `client.stop()` ends
+both. A transport with no `subscribe` runs on the poll alone. `onRevoked` fires
+from whichever path sees the revocation first, exactly once either way — but
+only while something is reading the rail, which is what `start` is for.
+
 ## The freshness rule
 
 Keep the last projection until a newer one arrives. Use `client.isFresh()` to

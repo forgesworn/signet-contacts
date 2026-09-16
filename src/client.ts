@@ -92,6 +92,24 @@ export interface SignetContactsClient {
   pendingProposals(): PendingProposal[];
   onRevoked(cb: (grantId: string) => void): () => void;
   load(grantId: string): Promise<ContactsState>;
+  /**
+   * R-32: live updates, with polling as the fallback.
+   *
+   * Subscribes to this grant's projection slot through `RelayIo.subscribe`, so
+   * a new projection AND a revocation tombstone both arrive without the app
+   * asking; `pollMs` (default `DEFAULT_LIVE_POLL_MS`) re-fetches on a timer in
+   * case the socket is down, the transport has no `subscribe` at all, or a
+   * relay simply never pushed. `onRevoked` fires from whichever path sees the
+   * revocation first, exactly once either way.
+   *
+   * One subscription per client: calling `start` again replaces the previous
+   * one. The returned function is the same as `stop`, for callers that prefer
+   * an unsubscribe handle.
+   */
+  start(pairing: PairingV2, opts?: { pollMs?: number }): () => void;
+  /** Stop the live subscription and the poll fallback. Idempotent; safe to
+   *  call from a component teardown that may never have called `start`. */
+  stop(): void;
 }
 
 /** Default storage: in-memory, per client. An app that wants state to survive a
@@ -112,6 +130,12 @@ const PENDING_KEY_PREFIX = 'signet-contacts:pending:';
  *  rather than shown for ever — the owner may simply have said no, and there
  *  is no "declined" message on this wire by design. */
 const DEFAULT_PENDING_STALENESS_SECONDS = 604_800;
+
+/** R-32: how often `start()` re-fetches when nothing has been pushed. A
+ *  minute is slow enough to be nearly free on a live subscription that is
+ *  working, and fast enough that a grant revoked while the socket was down is
+ *  noticed within a minute of it coming back. */
+export const DEFAULT_LIVE_POLL_MS = 60_000;
 
 const CAPABILITY_FOR_ACTION: Record<ContactProposalDraft['action'], Capability> = {
   'add-ken': 'signet.contacts.propose:add-ken',
@@ -232,6 +256,97 @@ export function createSignetContactsClient(opts: {
     return one ? [one] : [];
   }
 
+  let unsubscribe: (() => void) | null = null;
+  let pollTimer: ReturnType<typeof setInterval> | null = null;
+  /** Every ingest — pushed or polled — runs through this one chain, so two
+   *  events arriving together can never interleave their read-modify-write of
+   *  `state` (the frontier rule only orders correctly against the state the
+   *  previous ingest actually committed). */
+  let ingestQueue: Promise<unknown> = Promise.resolve();
+
+  function stopLive(): void {
+    if (unsubscribe) {
+      try { unsubscribe(); } catch { /* already closed */ }
+      unsubscribe = null;
+    }
+    if (pollTimer !== null) {
+      clearInterval(pollTimer);
+      pollTimer = null;
+    }
+  }
+
+  /**
+   * The whole consumer-side acceptance path for ONE projection event, shared
+   * by `fetchProjection` and the live subscription so the two can never drift
+   * apart on what they check. Returns the applied projection, or null for
+   * anything rejected at any gate.
+   */
+  function ingestProjectionEvent(
+    pairing: PairingV2, event: SignedNostrEvent,
+  ): Promise<ContactProjectionV2 | null> {
+    const run = ingestQueue.then(async () => {
+      try {
+        // Author pin. A relay may answer with anything; a projection signed by
+        // a key that is not this grant's rail is not this grant's projection.
+        if (typeof event.pubkey !== 'string' || event.pubkey.toLowerCase() !== pairing.railPubkey.toLowerCase()) {
+          return null;
+        }
+        if (typeof event.content !== 'string') return null;
+        // Bounded: an oversized `content` is refused before it can buy a
+        // signer round-trip, which post-migration is an ESP32 away.
+        if (event.content.length > MAX_ENVELOPE_CHARS) return null;
+
+        // Fix round 1, C2 (ruling R-4): the app publishes every private-state
+        // rail — this grant's projection included — as a v2 VAULT ENVELOPE
+        // (`{v:2,k,iv,ct,b}`: a random AES-256-GCM content key, itself
+        // NIP-44-wrapped), never a bare NIP-44 payload. A bare
+        // `signer.nip44Decrypt` here would try to NIP-44-decrypt that JSON
+        // and fail on every real projection.
+        const plaintext = await openVaultPayload(event.content, signer, pairing.railPubkey);
+        if (plaintext === null) return null;
+
+        const projection = parseProjection(plaintext);
+        if (!projection || projection.grantId !== pairing.grantId) return null;
+
+        // Fix round 1, M3: the grant's own `grantedCapabilities` is a ceiling
+        // on what this projection may claim to carry — a producer (or a
+        // relay replaying an old event from before a narrowing) cannot hand
+        // out MORE scopes than the app was actually granted.
+        const grantedSet = new Set(pairing.grantedCapabilities);
+        if (projection.scopes.some((sc) => !grantedSet.has(sc))) return null;
+
+        // Controller correction 2: the grant's own clamped ceiling on how
+        // stale a projection may be, enforced independently of whatever the
+        // projection itself claims — a producer (or a relay replaying an old
+        // event) cannot hand out a wider staleness window than the owner
+        // actually granted. Treated as malformed: reject, do not apply.
+        if (projection.expiresAt - projection.issuedAt > pairing.maxStalenessSeconds) return null;
+
+        const nowSec = now();
+        const next = applyProjection(state, projection, nowSec);
+        // Fix round 1, I1: `next === state` means the frontier rule REJECTED
+        // this projection (an older or duplicate replay) — the caller must
+        // not be handed a projection that was never actually applied.
+        if (next === state) return null;
+        state = next;
+        reconcilePending(projection, nowSec);
+        await persistState();
+        await persistPending(pairing.grantId);
+        if (state.revoked && !revokedAnnounced) {
+          revokedAnnounced = true;
+          for (const cb of revokedListeners) cb(state.grantId ?? projection.grantId);
+        }
+        return projection;
+      } catch {
+        return null;
+      }
+    });
+    // The chain itself must never settle rejected, or one bad event would
+    // wedge every later ingest behind it.
+    ingestQueue = run.then(() => undefined, () => undefined);
+    return run;
+  }
+
   return {
     buildPairingUri(uriOpts) {
       return buildPairingUriV2({ ...uriOpts, appPubkey: signer.pubkey });
@@ -307,60 +422,51 @@ export function createSignetContactsClient(opts: {
           projectionFilter(pairing.railPubkey, pairing.grantId), [pairing.relay], pairing.railPubkey,
         );
         if (!event) return null;
-        // Author pin. A relay may answer with anything; a projection signed by
-        // a key that is not this grant's rail is not this grant's projection.
-        if (typeof event.pubkey !== 'string' || event.pubkey.toLowerCase() !== pairing.railPubkey.toLowerCase()) {
-          return null;
-        }
-        if (typeof event.content !== 'string') return null;
-
-        // Fix round 1, C2 (ruling R-4): the app publishes every private-state
-        // rail — this grant's projection included — as a v2 VAULT ENVELOPE
-        // (`{v:2,k,iv,ct,b}`: a random AES-256-GCM content key, itself
-        // NIP-44-wrapped), never a bare NIP-44 payload. A bare
-        // `signer.nip44Decrypt` here would try to NIP-44-decrypt that JSON
-        // and fail on every real projection.
-        const plaintext = await openVaultPayload(event.content, signer, pairing.railPubkey);
-        if (plaintext === null) return null;
-
-        const projection = parseProjection(plaintext);
-        if (!projection || projection.grantId !== pairing.grantId) return null;
-
-        // Fix round 1, M3: the grant's own `grantedCapabilities` is a ceiling
-        // on what this projection may claim to carry — a producer (or a
-        // relay replaying an old event from before a narrowing) cannot hand
-        // out MORE scopes than the app was actually granted.
-        const grantedSet = new Set(pairing.grantedCapabilities);
-        if (projection.scopes.some((s) => !grantedSet.has(s))) return null;
-
-        // Controller correction 2: the grant's own clamped ceiling on how
-        // stale a projection may be, enforced independently of whatever the
-        // projection itself claims — a producer (or a relay replaying an old
-        // event) cannot hand out a wider staleness window than the owner
-        // actually granted. Treated as malformed: reject, do not apply.
-        if (projection.expiresAt - projection.issuedAt > pairing.maxStalenessSeconds) return null;
-
-        const nowSec = now();
-        const next = applyProjection(state, projection, nowSec);
-        // Fix round 1, I1: `next === state` means the frontier rule REJECTED
-        // this projection (an older or duplicate replay) — the caller must
-        // not be handed a projection that was never actually applied.
-        if (next === state) return null;
-        state = next;
-        reconcilePending(projection, nowSec);
-        await persistState();
-        await persistPending(pairing.grantId);
-        if (state.revoked && !revokedAnnounced) {
-          revokedAnnounced = true;
-          for (const cb of revokedListeners) cb(state.grantId ?? projection.grantId);
-        }
-        return projection;
+        return await ingestProjectionEvent(pairing, event);
       } catch {
         // Hostile or malformed relay data must never throw out of `fetch` —
         // see the module-header note.
         return null;
       }
     },
+
+    start(pairing, startOpts) {
+      // One subscription per client: a second `start` replaces the first
+      // rather than quietly leaving a socket and a timer behind.
+      stopLive();
+      const pollMs = startOpts?.pollMs ?? DEFAULT_LIVE_POLL_MS;
+      const filter = projectionFilter(pairing.railPubkey, pairing.grantId);
+
+      if (typeof relay.subscribe === 'function') {
+        try {
+          unsubscribe = relay.subscribe(filter, [pairing.relay], (event) => {
+            // Never let a pushed event reject into the transport's own
+            // callback — a relay's socket handler is not this SDK's error
+            // channel, and there is nowhere to report it to.
+            void ingestProjectionEvent(pairing, event).catch(() => undefined);
+          });
+        } catch {
+          // A transport that refuses to subscribe leaves the poll fallback
+          // doing the whole job, which is the documented degraded mode.
+          unsubscribe = null;
+        }
+      }
+
+      pollTimer = setInterval(() => {
+        void (async () => {
+          try {
+            const event = await relay.fetchNewest(filter, [pairing.relay], pairing.railPubkey);
+            if (event) await ingestProjectionEvent(pairing, event);
+          } catch {
+            // A poll that fails is a poll; the next one is a minute away.
+          }
+        })();
+      }, pollMs);
+
+      return stopLive;
+    },
+
+    stop() { stopLive(); },
 
     getState() { return state; },
     getBlockedSet() { return blockedSetOf(state); },

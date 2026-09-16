@@ -4,6 +4,7 @@ import {
   ACK_CANDIDATE_LIMIT, CAPABILITIES, CAPABILITY_DESCRIPTIONS,
   MAX_PROPOSALS_PER_BATCH, MAX_WIRE_BYTES,
 } from './wire/constants.js';
+import { DEFAULT_LIVE_POLL_MS } from './client.js';
 
 const wire = readFileSync('docs/WIRE.md', 'utf8');
 const readme = readFileSync('README.md', 'utf8');
@@ -99,6 +100,20 @@ describe('README.md', () => {
     expect(readme).toMatch(/never un-block/i);
     expect(readme).toMatch(/cannot recall|already downloaded|already decrypted/i);
     expect(readme).toMatch(/close circle/i);
+  });
+});
+
+describe('README.md and docs/INTEGRATION.md — live updates (R-32)', () => {
+  it('describe start/stop as live with a poll fallback, and the default cadence', () => {
+    for (const doc of [readme, integration]) {
+      expect(doc).toContain('client.start(');
+      expect(doc).toMatch(/poll(ing)? (as the )?fallback/i);
+    }
+    // Written for a reader ("60 000 ms"), pinned against the constant so a
+    // change to the default cadence cannot leave the README saying the old one.
+    const digits = String(DEFAULT_LIVE_POLL_MS).split('').join('[\\s_,]?');
+    expect(readme).toMatch(new RegExp(digits));
+    expect(integration).toContain('client.stop');
   });
 });
 

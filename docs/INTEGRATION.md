@@ -69,8 +69,10 @@ always read it back rather than assuming the owner ticked every box.
 
 ## Step 2 — Fetch
 
-Fetch on app start, and again whenever the app resumes from background.
-`isFresh()` drives a "last updated" line rather than gating anything:
+Fetch on app start, and again whenever the app resumes from background — and
+call `client.start(pairing)` (step 6) so later projections and a revocation
+arrive live rather than only when you next ask. `isFresh()` drives a "last
+updated" line rather than gating anything:
 
 ```ts
 async function refreshContacts(client: SignetContactsClient, pairing: PairingV2) {
@@ -178,11 +180,35 @@ Finally, wire up revocation. It clears the directory, but **keeps** the
 Blocked set, and should tell the person plainly which connection ended:
 
 ```ts
-const unsubscribe = client.onRevoked((grantId) => {
+const forget = client.onRevoked((grantId) => {
   notifyUser('Your Signet contacts connection has ended. Your blocked list is unaffected.');
   // client.getState().projection is now { contacts: [] }; getBlockedSet() is untouched
 });
 ```
+
+`onRevoked` fires from whichever path sees the revocation first — a live push or
+the next fetch — and exactly once either way. It does not fire on its own:
+something has to be reading the rail, which is what `client.start()` below is
+for. `onRevoked` returns a function that forgets the listener; it does not stop
+the subscription.
+
+## Step 6 — Stay current: live updates, with polling as the fallback
+
+`client.start(pairing)` subscribes to the grant's projection slot and polls as a
+fallback, so a new projection and a revocation tombstone both arrive without the
+app asking. Call `stop()` from whatever teardown owns the client — it is
+idempotent, and safe to call when `start` was never called:
+
+```ts
+useEffect(() => {
+  const stop = client.start(pairing, { pollMs: 60_000 }); // 60_000 is the default
+  return stop;                                            // same function as client.stop
+}, [client, pairing]);
+```
+
+A transport with no `subscribe` (or one whose socket is down) leaves the poll
+doing the whole job — that is a documented degraded mode, not a failure. One
+subscription per client: calling `start` again replaces the previous one.
 
 ## Summary
 
@@ -193,3 +219,4 @@ const unsubscribe = client.onRevoked((grantId) => {
 | 3. Filter by tier | `visibleContacts`, `effectiveTier` (app-owned policy) |
 | 4. Apply Blocked | `getBlockedSet` at ingress and at display |
 | 5. Propose | `propose`, `pendingProposals`, `onRevoked` |
+| 6. Stay current | `start` (live + poll fallback), `stop` |

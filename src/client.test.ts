@@ -486,6 +486,132 @@ describe('fetchProjection', () => {
   });
 });
 
+// R-32: live updates, with polling as the fallback. The SDK declared
+// `RelayIo.subscribe`, the adapter implemented it, and the client never called
+// it — so a consumer that wired `onRevoked` and waited learned nothing, ever.
+describe('start / stop — live updates with a poll fallback (R-32)', () => {
+  it('applies a projection pushed down the subscription, without any fetch', async () => {
+    const signer = fakeSigner();
+    const content = await sealProjection(signer, projection());
+    const fetchNewest = vi.fn(async () => null);
+    let push: ((e: SignedNostrEvent) => void) | null = null;
+    const close = vi.fn();
+    const client = createSignetContactsClient({
+      signer,
+      relay: {
+        fetchNewest,
+        publish: async () => true,
+        subscribe: (_filter, _relays, onEvent) => { push = onEvent; return close; },
+      },
+      now: () => 1_700_000_100,
+    });
+    const stop = client.start(PAIRING, { pollMs: 60_000 });
+    expect(push).not.toBeNull();
+    push!(signed(projectionEventTemplate(RAIL, GRANT, 1_700_000_000, content)));
+    await vi.waitFor(() => expect(client.getState().projection?.contacts).toHaveLength(1));
+    stop();
+    expect(close).toHaveBeenCalled();
+  });
+
+  it('fires onRevoked from the live path', async () => {
+    const signer = fakeSigner();
+    const content = await sealProjection(signer, projection({ contacts: [], revoked: true }));
+    let push: ((e: SignedNostrEvent) => void) | null = null;
+    const onRevoked = vi.fn();
+    const client = createSignetContactsClient({
+      signer,
+      relay: {
+        fetchNewest: async () => null,
+        publish: async () => true,
+        subscribe: (_f, _r, onEvent) => { push = onEvent; return () => {}; },
+      },
+    });
+    client.onRevoked(onRevoked);
+    client.start(PAIRING, { pollMs: 60_000 });
+    push!(signed(projectionEventTemplate(RAIL, GRANT, 1, content)));
+    await vi.waitFor(() => expect(onRevoked).toHaveBeenCalledWith(GRANT));
+    client.stop();
+    // Still exactly once when the same revocation then arrives by poll.
+    expect(onRevoked).toHaveBeenCalledTimes(1);
+  });
+
+  it('polls when the transport cannot subscribe, and stops polling on stop()', async () => {
+    const signer = fakeSigner();
+    const content = await sealProjection(signer, projection());
+    const fetchNewest = vi.fn(async () => signed(projectionEventTemplate(RAIL, GRANT, 1_700_000_000, content)));
+    const client = createSignetContactsClient({
+      signer,
+      // No `subscribe` at all — the documented degraded mode.
+      relay: { fetchNewest, publish: async () => true },
+      now: () => 1_700_000_100,
+    });
+    client.start(PAIRING, { pollMs: 10 });
+    // Nothing is fetched synchronously: the first poll is one interval away.
+    expect(fetchNewest).not.toHaveBeenCalled();
+    await vi.waitFor(() => expect(client.getState().projection?.contacts).toHaveLength(1));
+    client.stop();
+    const afterStop = fetchNewest.mock.calls.length;
+    await new Promise((resolve) => { setTimeout(resolve, 60); });
+    expect(fetchNewest.mock.calls.length).toBe(afterStop);
+  });
+
+  it('replaces the previous subscription when start is called again, and stop is idempotent', () => {
+    const closes = [vi.fn(), vi.fn()];
+    let index = 0;
+    const client = createSignetContactsClient({
+      signer: fakeSigner(),
+      relay: {
+        fetchNewest: async () => null,
+        publish: async () => true,
+        subscribe: () => closes[index++]!,
+      },
+    });
+    client.start(PAIRING, { pollMs: 60_000 });
+    client.start(PAIRING, { pollMs: 60_000 });
+    expect(closes[0]).toHaveBeenCalledTimes(1);
+    client.stop();
+    client.stop();
+    expect(closes[1]).toHaveBeenCalledTimes(1);
+  });
+
+  it('survives a transport whose subscribe throws, falling back to the poll alone', async () => {
+    const signer = fakeSigner();
+    const content = await sealProjection(signer, projection());
+    const fetchNewest = vi.fn(async () => signed(projectionEventTemplate(RAIL, GRANT, 1_700_000_000, content)));
+    const client = createSignetContactsClient({
+      signer,
+      relay: {
+        fetchNewest, publish: async () => true,
+        subscribe: () => { throw new Error('socket refused'); },
+      },
+      now: () => 1_700_000_100,
+    });
+    expect(() => client.start(PAIRING, { pollMs: 10 })).not.toThrow();
+    await vi.waitFor(() => expect(client.getState().projection?.contacts).toHaveLength(1));
+    client.stop();
+  });
+
+  it('ignores a pushed event that is not this grant’s rail, and never throws into the transport', async () => {
+    const signer = fakeSigner();
+    const content = await sealProjection(signer, projection());
+    let push: ((e: SignedNostrEvent) => void) | null = null;
+    const client = createSignetContactsClient({
+      signer,
+      relay: {
+        fetchNewest: async () => null, publish: async () => true,
+        subscribe: (_f, _r, onEvent) => { push = onEvent; return () => {}; },
+      },
+    });
+    client.start(PAIRING, { pollMs: 60_000 });
+    expect(() => push!({
+      ...signed(projectionEventTemplate(RAIL, GRANT, 1, content)), pubkey: '7'.repeat(64),
+    })).not.toThrow();
+    await Promise.resolve();
+    expect(client.getState().projection).toBeNull();
+    client.stop();
+  });
+});
+
 // Fix round 1, I2: a stored row is outside this client's control (shared with
 // the rest of the app, editable by devtools, subject to partial writes) —
 // `load()` must not trust it any further than a wire value.

@@ -37,3 +37,12 @@ the pairing challenge wins. `RelayIo` gains an optional `fetchMany`; a transport
 without one degrades to the previous single-candidate behaviour, and the
 bundled `SimplePool` adapter implements it over `querySync` (falling back to one
 `get` per relay).
+
+**Behaviour: live updates (R-32).** `client.start(pairing)` subscribes to the
+grant's projection slot through `RelayIo.subscribe` and polls every `pollMs`
+(default 60 000 ms) as a fallback, so a new projection and a revocation
+tombstone both arrive without the app asking. `onRevoked` fires from the live
+path and the fetch path alike, exactly once. `client.stop()` unsubscribes and
+clears the poll, and is idempotent. Previously `RelayIo.subscribe` was declared
+and implemented but never called, so a consumer that wired `onRevoked` and
+waited learned nothing until it happened to fetch again.
