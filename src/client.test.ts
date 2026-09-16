@@ -2,11 +2,11 @@ import { describe, it, expect, vi } from 'vitest';
 import { createSignetContactsClient, createMemoryStorage } from './client.js';
 import type { ContactsSigner, RelayIo } from './client.js';
 import { buildPairingAckV2, ackEventTemplate } from './wire/ack.js';
-import { sealVaultPayload } from './wire/envelope.js';
+import { MAX_ENVELOPE_CHARS, sealVaultPayload } from './wire/envelope.js';
 import { buildProjection, projectionEventTemplate } from './wire/projection.js';
 import { parseProposalBatch } from './wire/proposal.js';
 import { projectionTag, proposalTag } from './wire/ids.js';
-import { PAIRING_FRESHNESS_SECONDS } from './wire/constants.js';
+import { ACK_CANDIDATE_LIMIT, PAIRING_FRESHNESS_SECONDS } from './wire/constants.js';
 import type { ContactProjectionV2, PairingV2, SignedNostrEvent } from './wire/types.js';
 
 const GRANT = 'f'.repeat(32);
@@ -201,6 +201,90 @@ describe('awaitPairingAck', () => {
     });
     const pairing = await client.awaitPairingAck({ challenge: CHALLENGE, relays: RELAYS, timeoutMs: 30, pollMs: 10 });
     expect(pairing).toBeNull();
+  });
+
+  // I3: both the app pubkey and the rendezvous relay are printed in the QR the
+  // consumer shows on screen, so anyone who photographs it can park a junk
+  // kind-21237 addressed to the app. A `limit: 1` fetch let one such event keep
+  // the genuine ack out of the answer for the whole pairing window, while the
+  // owner's device had already spent a grant slot on it.
+  it('accepts the genuine ack from behind newer junk events (I3)', async () => {
+    const signer = fakeSigner();
+    const ackPlain = buildPairingAckV2({
+      v: 2, grantId: GRANT, railPubkey: RAIL,
+      projectionTag: projectionTag(GRANT), proposalTag: proposalTag(GRANT, APP),
+      relay: RELAYS[0]!, grantedCapabilities: ['signet.contacts.read:directory'],
+      maxStalenessSeconds: 21600, challenge: CHALLENGE,
+    });
+    const genuine = {
+      ...ackEventTemplate('9'.repeat(64), APP, 1_700_000_000, await signer.nip44Encrypt(APP, ackPlain)),
+      id: '4'.repeat(64), sig: '5'.repeat(128),
+    };
+    // Newest first: undecryptable junk, then an ack echoing someone else's
+    // challenge, then the real one.
+    const junkUndecryptable = {
+      ...ackEventTemplate('8'.repeat(64), APP, 1_700_000_002, 'not even JSON'),
+      id: '6'.repeat(64), sig: '5'.repeat(128),
+    };
+    const junkWrongChallenge = {
+      ...ackEventTemplate('7'.repeat(64), APP, 1_700_000_001, await signer.nip44Encrypt(APP, buildPairingAckV2({
+        v: 2, grantId: '0'.repeat(32), railPubkey: RAIL, projectionTag: projectionTag(GRANT),
+        proposalTag: proposalTag(GRANT, APP), relay: RELAYS[0]!,
+        grantedCapabilities: ['signet.contacts.read:directory'], maxStalenessSeconds: 21600,
+        challenge: 'E'.repeat(32),
+      }))),
+      id: '7'.repeat(64), sig: '5'.repeat(128),
+    };
+    const fetchMany = vi.fn(async () => [junkUndecryptable, junkWrongChallenge, genuine]);
+    const client = createSignetContactsClient({
+      signer,
+      relay: {
+        fetchNewest: async () => junkUndecryptable,
+        fetchMany,
+        publish: async () => true,
+      },
+      now: () => 1_700_000_000,
+    });
+    const pairing = await client.awaitPairingAck({ challenge: CHALLENGE, relays: RELAYS, timeoutMs: 50, pollMs: 5 });
+    expect(pairing?.grantId).toBe(GRANT);
+    expect(fetchMany).toHaveBeenCalled();
+    // The filter asks for several, never one.
+    expect((fetchMany.mock.calls[0]?.[0] as { limit: number }).limit).toBe(ACK_CANDIDATE_LIMIT);
+  });
+
+  it('falls back to the single newest when the transport has no fetchMany (I3)', async () => {
+    const signer = fakeSigner();
+    const content = await signer.nip44Encrypt(APP, buildPairingAckV2({
+      v: 2, grantId: GRANT, railPubkey: RAIL, projectionTag: projectionTag(GRANT),
+      proposalTag: proposalTag(GRANT, APP), relay: RELAYS[0]!,
+      grantedCapabilities: ['signet.contacts.read:directory'], maxStalenessSeconds: 21600,
+      challenge: CHALLENGE,
+    }));
+    const client = createSignetContactsClient({
+      signer,
+      relay: {
+        fetchNewest: async () => ({ ...ackEventTemplate('9'.repeat(64), APP, 1_700_000_000, content), id: '4'.repeat(64), sig: '5'.repeat(128) }),
+        publish: async () => true,
+      },
+      now: () => 1_700_000_000,
+    });
+    expect((await client.awaitPairingAck({ challenge: CHALLENGE, relays: RELAYS, timeoutMs: 50, pollMs: 5 }))?.grantId).toBe(GRANT);
+  });
+
+  it('never decrypts an ack candidate whose content is over the envelope cap', async () => {
+    const signer = fakeSigner();
+    const decrypt = vi.spyOn(signer, 'nip44Decrypt');
+    const oversized = {
+      ...ackEventTemplate('9'.repeat(64), APP, 1_700_000_000, 'x'.repeat(MAX_ENVELOPE_CHARS + 1)),
+      id: '4'.repeat(64), sig: '5'.repeat(128),
+    };
+    const client = createSignetContactsClient({
+      signer,
+      relay: { fetchNewest: async () => oversized, fetchMany: async () => [oversized], publish: async () => true },
+      now: () => 1_700_000_000,
+    });
+    expect(await client.awaitPairingAck({ challenge: CHALLENGE, relays: RELAYS, timeoutMs: 30, pollMs: 10 })).toBeNull();
+    expect(decrypt).not.toHaveBeenCalled();
   });
 
   // Fix round 1, M4.

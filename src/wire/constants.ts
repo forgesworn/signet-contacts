@@ -15,6 +15,23 @@ export const PROPOSAL_KIND = 30078;
 export const PAIRING_FRESHNESS_SECONDS = 300;
 
 /**
+ * How many kind-21237 candidates a consumer considers when waiting for its
+ * pairing ack (I3).
+ *
+ * Both the app pubkey and the rendezvous relay are printed in the QR code the
+ * consumer shows on screen, and the ack is carried by a throwaway ephemeral
+ * key, so anyone who photographs that QR can publish a junk event addressed to
+ * the app. Asking a relay for the single newest match let one such event keep
+ * the genuine ack out of the answer for the whole pairing window, and the
+ * owner's device has by then already minted, saved and spent a grant slot on a
+ * pairing that can never complete. The consumer therefore takes up to this many
+ * candidates, newest first, and accepts the first that decrypts to its own key
+ * AND echoes its own challenge — junk costs one failed decrypt each, and ten is
+ * far more than a pairing window ever legitimately contains.
+ */
+export const ACK_CANDIDATE_LIMIT = 10;
+
+/**
  * R-12: there is no `signet.contacts.read:avatar` in v2. A capability that
  * grants a field the producer cannot fill is a promise the wire does not keep,
  * so it waits until signet-app has an avatar map to project. `ProjectedAvatar`

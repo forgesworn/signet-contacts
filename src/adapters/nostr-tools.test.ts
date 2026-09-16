@@ -28,6 +28,55 @@ describe('createSimplePoolRelayIo', () => {
     expect(await junk.fetchNewest({ kinds: [30078] }, ['wss://r.example'])).toBeNull();
   });
 
+  // I3: several candidates, newest first, deduped, author-pinned and capped.
+  it('maps fetchMany onto pool.querySync, newest first and deduped by id', async () => {
+    const older: SignedNostrEvent = { ...EVENT, id: '1'.repeat(64), created_at: 10 };
+    const newer: SignedNostrEvent = { ...EVENT, id: '2'.repeat(64), created_at: 20 };
+    const querySync = vi.fn(async () => [older, newer, { ...newer }, { junk: true }]);
+    const io = createSimplePoolRelayIo({
+      get: async () => null, publish: () => [], subscribeMany: () => ({ close() {} }), querySync,
+    });
+    const many = await io.fetchMany!({ kinds: [21237], limit: 10 }, ['wss://r.example']);
+    expect(many.map((e) => e.id)).toEqual([newer.id, older.id]);
+    expect(querySync).toHaveBeenCalled();
+  });
+
+  it('caps fetchMany at the filter limit and pins the author', async () => {
+    const events: SignedNostrEvent[] = Array.from({ length: 5 }, (_, i) => ({
+      ...EVENT, id: String(i).repeat(64), created_at: 100 + i,
+    }));
+    const stranger: SignedNostrEvent = { ...EVENT, id: '9'.repeat(64), created_at: 999, pubkey: 'c'.repeat(64) };
+    const io = createSimplePoolRelayIo({
+      get: async () => null, publish: () => [], subscribeMany: () => ({ close() {} }),
+      querySync: async () => [...events, stranger],
+    });
+    const many = await io.fetchMany!({ kinds: [21237], limit: 2 }, ['wss://r.example'], EVENT.pubkey);
+    expect(many).toHaveLength(2);
+    expect(many.every((e) => e.pubkey === EVENT.pubkey)).toBe(true);
+    expect(many[0]?.created_at).toBe(104);
+  });
+
+  it('degrades fetchMany to one get per relay when the pool has no querySync', async () => {
+    const perRelay: Record<string, SignedNostrEvent> = {
+      'wss://a.example': { ...EVENT, id: 'a'.repeat(64), created_at: 5 },
+      'wss://b.example': { ...EVENT, id: 'b'.repeat(64), created_at: 9 },
+    };
+    const io = createSimplePoolRelayIo({
+      get: async (relays) => perRelay[relays[0]!] ?? null,
+      publish: () => [], subscribeMany: () => ({ close() {} }),
+    });
+    const many = await io.fetchMany!({ kinds: [21237], limit: 10 }, ['wss://a.example', 'wss://b.example']);
+    expect(many.map((e) => e.id)).toEqual(['b'.repeat(64), 'a'.repeat(64)]);
+  });
+
+  it('resolves fetchMany to an empty list when every relay times out or throws', async () => {
+    const io = createSimplePoolRelayIo({
+      get: async () => null, publish: () => [], subscribeMany: () => ({ close() {} }),
+      querySync: async () => { throw new Error('offline'); },
+    }, { timeoutMs: 10 });
+    expect(await io.fetchMany!({ kinds: [21237] }, ['wss://r.example'])).toEqual([]);
+  });
+
   it('resolves publish true when at least one relay accepts', async () => {
     const io = createSimplePoolRelayIo({
       get: async () => null,

@@ -23,6 +23,11 @@ export interface SimplePoolLike {
   get(relays: string[], filter: object): Promise<unknown>;
   publish(relays: string[], event: object): Promise<string>[];
   subscribeMany(relays: string[], filter: object, params: { onevent: (e: unknown) => void }): { close(): void };
+  /** Optional on purpose: nostr-tools' own `SimplePool` has it, but this
+   *  interface is structural so a consumer on another client library can
+   *  satisfy the rest without it. Missing, `fetchMany` degrades to one `get`
+   *  per relay (I3). */
+  querySync?(relays: string[], filter: object): Promise<unknown[]>;
 }
 
 export interface SimplePoolRelayIoOptions {
@@ -31,6 +36,11 @@ export interface SimplePoolRelayIoOptions {
 }
 
 const DEFAULT_RELAY_TIMEOUT_MS = 8000;
+
+/** `fetchMany` with no `limit` on the filter, and the ceiling on any `limit`
+ *  a caller does name — a relay's answer is never trusted to be small. */
+const DEFAULT_FETCH_MANY_LIMIT = 10;
+const MAX_FETCH_MANY_LIMIT = 100;
 
 /** Distinguishes "the timeout fired" from any real value a pool call could
  *  resolve to (including `undefined`/`null`), so a raced call never confuses
@@ -136,6 +146,59 @@ export function createSimplePoolRelayIo(pool: SimplePoolLike, opts: SimplePoolRe
     return best;
   }
 
+  /**
+   * I3: several candidates for one filter, newest first. Uses the pool's own
+   * `querySync` when it has one, and otherwise degrades to one `get` per relay
+   * — which still beats a single combined `get`, because each relay
+   * contributes its own newest candidate.
+   *
+   * Bounded on every axis a relay controls: each pool call is raced against
+   * `timeoutMs`, results are deduped by event id, the author pin is applied
+   * here as well as in the client, and the list is cut to `filter.limit` (or
+   * `DEFAULT_FETCH_MANY_LIMIT` when the filter names none) before it is
+   * returned — so a relay answering with ten thousand events costs the caller
+   * at most `limit` decrypt attempts.
+   */
+  async function doFetchMany(
+    filter: NostrFilterLike, relays: string[], author?: string,
+  ): Promise<SignedNostrEvent[]> {
+    const limit = typeof filter.limit === 'number' && Number.isInteger(filter.limit) && filter.limit > 0
+      ? Math.min(filter.limit, MAX_FETCH_MANY_LIMIT)
+      : DEFAULT_FETCH_MANY_LIMIT;
+    const raws: unknown[] = [];
+    if (typeof pool.querySync === 'function') {
+      const querySync = pool.querySync.bind(pool);
+      const answers = await Promise.all(
+        relays.map((r) => raceTimeout(() => Promise.resolve(querySync([r], filter as object)), timeoutMs)),
+      );
+      for (const answer of answers) {
+        if (answer === TIMEOUT || !Array.isArray(answer)) continue;
+        for (const raw of answer.slice(0, MAX_FETCH_MANY_LIMIT)) raws.push(raw);
+      }
+    } else {
+      const answers = await Promise.all(
+        relays.map((r) => raceTimeout(() => pool.get([r], filter as object), timeoutMs)),
+      );
+      for (const answer of answers) {
+        if (answer === TIMEOUT) continue;
+        raws.push(answer);
+      }
+    }
+
+    const byId = new Map<string, SignedNostrEvent>();
+    for (const raw of raws) {
+      const event = asSignedEvent(raw);
+      if (!event) continue;
+      if (author && event.pubkey.toLowerCase() !== author.toLowerCase()) continue;
+      if (!byId.has(event.id)) byId.set(event.id, event);
+    }
+    // Newest first; a same-second tie breaks on the LOWEST id, the same rule
+    // `doFetchNewest` uses, so both paths agree on an ordering.
+    return [...byId.values()]
+      .sort((a, b) => (b.created_at - a.created_at) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+      .slice(0, limit);
+  }
+
   async function doPublish(event: SignedNostrEvent, relays: string[]): Promise<boolean> {
     let publishing: Promise<string>[];
     try {
@@ -155,6 +218,11 @@ export function createSimplePoolRelayIo(pool: SimplePoolLike, opts: SimplePoolRe
     fetchNewest(filter: NostrFilterLike, relays: string[], author?: string) {
       assertValidRelays(relays);
       return doFetchNewest(filter, relays, author);
+    },
+
+    fetchMany(filter: NostrFilterLike, relays: string[], author?: string) {
+      assertValidRelays(relays);
+      return doFetchMany(filter, relays, author);
     },
 
     publish(event: SignedNostrEvent, relays: string[]) {

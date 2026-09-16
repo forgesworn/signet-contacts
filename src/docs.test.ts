@@ -1,6 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
-import { CAPABILITIES, CAPABILITY_DESCRIPTIONS, MAX_PROPOSALS_PER_BATCH, MAX_WIRE_BYTES } from './wire/constants.js';
+import {
+  ACK_CANDIDATE_LIMIT, CAPABILITIES, CAPABILITY_DESCRIPTIONS,
+  MAX_PROPOSALS_PER_BATCH, MAX_WIRE_BYTES,
+} from './wire/constants.js';
 
 const wire = readFileSync('docs/WIRE.md', 'utf8');
 const readme = readFileSync('README.md', 'utf8');
@@ -56,6 +59,14 @@ describe('docs/WIRE.md', () => {
     expect(wire).toContain('`(publishedAt, maxClock)`');
     expect(wire).not.toContain('`(maxClock, publishedAt)`');
     expect(wire).toMatch(/revoked[^\n]*exempt|exempt[^\n]*revocation/i);
+  });
+
+  // I3: an implementer who reads "newest ack wins" builds the crowd-out back
+  // in, so the candidate count is documented as a number and pinned here.
+  it('states how many ack candidates a consumer considers (I3)', () => {
+    expect(wire).toContain(String(ACK_CANDIDATE_LIMIT));
+    expect(wire).toContain('ACK_CANDIDATE_LIMIT');
+    expect(wire).toMatch(/newest first/i);
   });
 
   it('points at the generated vectors', () => {

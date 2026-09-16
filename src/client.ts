@@ -20,11 +20,11 @@
  * ack) and is always author-pinned before its ciphertext is even opened.
  */
 import {
-  ACK_KIND, PAIRING_FRESHNESS_SECONDS, isCapability,
+  ACK_CANDIDATE_LIMIT, ACK_KIND, PAIRING_FRESHNESS_SECONDS, isCapability,
 } from './wire/constants.js';
 import type { Capability } from './wire/constants.js';
 import { parsePairingAckV2, pairingFromAck } from './wire/ack.js';
-import { openVaultPayload } from './wire/envelope.js';
+import { MAX_ENVELOPE_CHARS, openVaultPayload } from './wire/envelope.js';
 import { isHex } from './wire/ids.js';
 import { buildPairingUriV2, parsePairingRequestV2 } from './wire/pairing.js';
 import { parseProjection, projectionFilter } from './wire/projection.js';
@@ -46,6 +46,20 @@ export interface ContactsSigner {
 export interface RelayIo {
   fetchNewest(filter: NostrFilterLike, relays: string[], author?: string): Promise<SignedNostrEvent | null>;
   publish(event: SignedNostrEvent, relays: string[]): Promise<boolean>;
+  /**
+   * I3: several candidates for one filter, NEWEST FIRST, deduped by id and
+   * capped at `filter.limit`. Optional — a transport that cannot do it leaves
+   * it out and the client falls back to `fetchNewest`, which considers one
+   * candidate. It matters for the pairing ack, where a single junk event
+   * addressed to the app pubkey (which is printed in the QR the consumer shows
+   * on screen) would otherwise crowd the genuine ack out of the answer.
+   */
+  fetchMany?(filter: NostrFilterLike, relays: string[], author?: string): Promise<SignedNostrEvent[]>;
+  /**
+   * R-32: live delivery of everything matching `filter`, until the returned
+   * unsubscribe is called. Optional — without it the client's `start()` runs
+   * on its poll fallback alone.
+   */
   subscribe?(filter: NostrFilterLike, relays: string[], onEvent: (event: SignedNostrEvent) => void): () => void;
 }
 
@@ -199,6 +213,25 @@ export function createSignetContactsClient(opts: {
     });
   }
 
+  /**
+   * I3: up to `ACK_CANDIDATE_LIMIT` ack candidates, newest first. A transport
+   * that implements `fetchMany` answers with all of them; one that does not
+   * degrades to the single newest, which is the old behaviour rather than a
+   * failure. Author pinning is deliberately absent: the ack is carried by a
+   * throwaway ephemeral key the app has never seen, so there is nothing to pin
+   * it to — NIP-44 plus the challenge is the gate (see the module header).
+   */
+  async function fetchAckCandidates(
+    filter: NostrFilterLike, relays: string[],
+  ): Promise<SignedNostrEvent[]> {
+    if (typeof relay.fetchMany === 'function') {
+      const many = await relay.fetchMany(filter, relays);
+      return Array.isArray(many) ? many.slice(0, ACK_CANDIDATE_LIMIT) : [];
+    }
+    const one = await relay.fetchNewest(filter, relays);
+    return one ? [one] : [];
+  }
+
   return {
     buildPairingUri(uriOpts) {
       return buildPairingUriV2({ ...uriOpts, appPubkey: signer.pubkey });
@@ -210,15 +243,22 @@ export function createSignetContactsClient(opts: {
 
     async awaitPairingAck({ challenge, relays, timeoutMs = 120_000, pollMs = 2000, requestedCapabilities }) {
       const deadline = Date.now() + timeoutMs;
-      const filter: NostrFilterLike = { kinds: [ACK_KIND], '#p': [signer.pubkey], limit: 1 };
+      // I3: several candidates, not one. See `ACK_CANDIDATE_LIMIT`.
+      const filter: NostrFilterLike = {
+        kinds: [ACK_KIND], '#p': [signer.pubkey], limit: ACK_CANDIDATE_LIMIT,
+      };
       const allowed = requestedCapabilities ? new Set<Capability>(requestedCapabilities) : null;
 
       while (Date.now() < deadline) {
         // Hostile or merely broken relay data must never escape this loop as a
         // thrown exception — a bad event is exactly as "no ack yet" as no event.
         try {
-          const event = await relay.fetchNewest(filter, relays);
-          if (event && typeof event.pubkey === 'string' && typeof event.content === 'string') {
+          const candidates = await fetchAckCandidates(filter, relays);
+          for (const event of candidates) {
+            if (!event || typeof event.pubkey !== 'string' || typeof event.content !== 'string') continue;
+            // Bounded, like the projection path: an oversized `content` is
+            // refused before it can buy a signer round-trip.
+            if (event.content.length > MAX_ENVELOPE_CHARS) continue;
             // Controller correction 1: the ack payload carries no timestamp of
             // its own, so freshness is judged on the carrier EVENT's
             // `created_at` — an old ack replayed by a relay must not resurrect
@@ -226,30 +266,28 @@ export function createSignetContactsClient(opts: {
             const createdAt = event.created_at;
             const fresh = typeof createdAt === 'number' && Number.isFinite(createdAt)
               && Math.abs(now() - createdAt) <= PAIRING_FRESHNESS_SECONDS;
-            if (fresh) {
-              try {
-                const plaintext = await signer.nip44Decrypt(event.pubkey, event.content);
-                const ack = parsePairingAckV2(plaintext, challenge);
-                if (ack) {
-                  // Controller correction 1: narrowing only. A producer that
-                  // grants a capability the app never requested is either a bug
-                  // or an attempt to smuggle scope past the app's own consent
-                  // screen — either way this is not a valid ack for this request.
-                  const overGranted = allowed !== null
-                    && ack.grantedCapabilities.some((c) => !allowed.has(c));
-                  // Fix round 1, M4: a rail that is the app's OWN pubkey is
-                  // nonsensical for this wire (the app cannot be its own
-                  // signing rail) and would make the projection's later
-                  // author-pin check trivially satisfiable by anything the
-                  // app itself ever publishes — reject rather than pair.
-                  const selfRail = ack.railPubkey.toLowerCase() === signer.pubkey.toLowerCase();
-                  if (!overGranted && !selfRail) return pairingFromAck(ack, now());
-                }
-              } catch {
-                // Not our ack, or not decryptable by us — keep waiting rather
-                // than failing the whole pairing on one stray event addressed
-                // to us. (S7: NIP-44 is the real authentication gate here.)
-              }
+            if (!fresh) continue;
+            try {
+              const plaintext = await signer.nip44Decrypt(event.pubkey, event.content);
+              const ack = parsePairingAckV2(plaintext, challenge);
+              if (!ack) continue;
+              // Controller correction 1: narrowing only. A producer that
+              // grants a capability the app never requested is either a bug
+              // or an attempt to smuggle scope past the app's own consent
+              // screen — either way this is not a valid ack for this request.
+              const overGranted = allowed !== null
+                && ack.grantedCapabilities.some((c) => !allowed.has(c));
+              // Fix round 1, M4: a rail that is the app's OWN pubkey is
+              // nonsensical for this wire (the app cannot be its own
+              // signing rail) and would make the projection's later
+              // author-pin check trivially satisfiable by anything the
+              // app itself ever publishes — reject rather than pair.
+              const selfRail = ack.railPubkey.toLowerCase() === signer.pubkey.toLowerCase();
+              if (!overGranted && !selfRail) return pairingFromAck(ack, now());
+            } catch {
+              // Not our ack, or not decryptable by us — try the next candidate
+              // rather than failing the whole pairing on one stray event
+              // addressed to us. (S7: NIP-44 is the real authentication gate.)
             }
           }
         } catch {

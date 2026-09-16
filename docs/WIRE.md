@@ -81,6 +81,26 @@ within `PAIRING_FRESHNESS_SECONDS` (300s) of the reader's clock. `challenge` is
 compared byte-for-byte, case preserved, on the way back in the ack — it is the
 app's own anti-replay nonce.
 
+### Ack delivery — several candidates, never one (I3)
+
+A consumer waiting for its ack asks for up to **`ACK_CANDIDATE_LIMIT` = 10**
+kind-21237 events tagged `["p", appPubkey]`, takes them newest first, and
+accepts the first that both decrypts under its own key and echoes its own
+`challenge`. Every other candidate costs one failed decrypt and nothing else.
+
+This is not an optimisation. The app pubkey and the rendezvous relay are both
+printed in the QR code the consumer displays on screen, and the ack is carried
+by a throwaway ephemeral key, so anyone who photographs that QR can publish a
+junk kind-21237 addressed to the app. A reader that asked for the single newest
+match could be kept away from the genuine ack for the whole pairing window by
+one such event — while Signet, which has already published its ack, has minted,
+stored and spent one of the owner's grant slots on a pairing that can never
+complete. An implementation that can only fetch one event per relay should
+query each relay separately rather than one merged newest.
+
+There is deliberately no author pin on an ack: the carrier key is ephemeral and
+the reader has never seen it before. NIP-44 and the challenge are the gate.
+
 ## 4. Tag derivations
 
 Every routing tag is a domain-separated SHA-256 digest truncated to 128 bits

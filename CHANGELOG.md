@@ -26,3 +26,14 @@ be published. Safety state must not wait for the producer's log to converge, so
 recency decides and the Lamport clock only breaks a same-second tie. An exact
 tie on both is still ignored, and a revocation is still exempt from the check
 entirely.
+
+**Behaviour: the pairing ack is chosen from up to 10 candidates (I3).**
+`awaitPairingAck` no longer fetches a single newest event: a third party who
+photographed the pairing QR could park one junk kind-21237 addressed to the app
+and keep the genuine ack out of a `limit: 1` answer for the whole window, while
+the owner's device had already spent a grant slot on it. Each candidate is now
+tried newest-first and the first that decrypts to the app's own key and carries
+the pairing challenge wins. `RelayIo` gains an optional `fetchMany`; a transport
+without one degrades to the previous single-candidate behaviour, and the
+bundled `SimplePool` adapter implements it over `querySync` (falling back to one
+`get` per relay).
