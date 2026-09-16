@@ -215,6 +215,15 @@ describe('docs/INTEGRATION.md and SECURITY.md', () => {
     expect(bullets.length).toBeLessThanOrEqual(14);
   });
 
+  // C-C1: SECURITY.md claimed the rail key is all an app sees while the
+  // projection carried the owner's persona pubkey. R-31 made the claim true;
+  // this pins both halves together.
+  it('states what an app never receives, including the owner persona pubkey', () => {
+    expect(security).toMatch(/persona pubkey/i);
+    expect(security).toContain('R-31');
+    expect(security).toMatch(/rail key, and only the rail key/);
+  });
+
   it('states the author-pin reasoning and the timing trade-off (S7, S8)', () => {
     expect(security).toMatch(/event\.pubkey/);
     expect(security).toMatch(/timing/i);

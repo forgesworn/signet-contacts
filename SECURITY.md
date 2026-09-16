@@ -13,9 +13,13 @@ this wire cannot promise no matter how it is implemented.
   contacts themselves — anything that can open the vault can already open
   every rail inside it — so this is not a new exposure; without it a grant
   would silently be single-device.
-- No app ever receives the owner's vault key, their Natural Person key, or the
-  shared contacts npub — the rail key, and only the rail key, is what a
-  connected app ever sees.
+- No app ever receives the owner's vault key, their Natural Person key, the
+  shared contacts npub, or the persona pubkey of whoever's directory it is
+  reading — the rail key, and only the rail key, is what a connected app ever
+  sees. A projection deliberately carries no owner pubkey (R-31): it would have
+  been identical in every grant on that directory, so two colluding apps could
+  have joined on it in one line, and on a dependant directory it would have
+  been a minor's long-lived public identity.
 - A projection is sealed to the app's own pubkey inside the v2 vault envelope
   and padded into a fixed bucket; the event carries no `#p` tag, so neither
   the recipient nor the directory's real size is visible to anyone reading the
@@ -28,13 +32,22 @@ this wire cannot promise no matter how it is implemented.
   field for them, not merely "the current builder happens not to fill them in".
 - A proposal is a request, never a write: it is validated against the grant
   and mapped onto a canonical contact operation only after that check passes.
-- `operationId` (32 random hex bytes minted per proposal) makes every proposal
-  idempotent and safe to retry or replay.
+- `operationId` (16 random bytes, 32 hex characters, minted per proposal) is the
+  idempotency key: a producer that has already applied one does nothing on a
+  retry. Idempotency by id alone is not a ceiling, so the producer also refuses
+  an `add-ken` for a pubkey its directory already holds, caps how many contacts
+  one grant may create, and drops app-created records first when a projection
+  has to be truncated — an app cannot grow a directory without bound, nor push
+  the owner's own contacts out of a different app's view.
 - Revocation stops future reads and writes; it cannot recall plaintext an app
   has already decrypted — see the README's "Revocation is not recall".
 - Blocked state is sticky inside the consumer client and never decays on a
   timer or an expired projection; only a newer, non-revoked projection may
-  narrow it.
+  narrow it — and "newer" is decided by when a snapshot was published, not by
+  how much of the owner's log the publishing device had seen (R-30), so a block
+  entered on a device that is behind still applies at once. Stickiness survives
+  a restart only if the client was given persistent storage; the default store
+  is in-memory (see the README).
 - Blocking inside this wire cannot stop someone publishing ordinary Nostr
   events, nor reaching the person through an unrelated identity or an
   application outside Signet's own enforcement boundary.
