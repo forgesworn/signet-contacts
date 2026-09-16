@@ -49,6 +49,15 @@ describe('docs/WIRE.md', () => {
     expect('ownerPubkey' in vector.full.parsed).toBe(false);
   });
 
+  // R-30: the ordering rule is the one thing an independent implementer can
+  // get backwards while every vector still passes, so the doc must state the
+  // order the code actually applies.
+  it('states the frontier order as publishedAt first, maxClock as the tiebreak (R-30)', () => {
+    expect(wire).toContain('`(publishedAt, maxClock)`');
+    expect(wire).not.toContain('`(maxClock, publishedAt)`');
+    expect(wire).toMatch(/revoked[^\n]*exempt|exempt[^\n]*revocation/i);
+  });
+
   it('points at the generated vectors', () => {
     expect(wire).toContain('vectors/pairing.v2.json');
     expect(wire).toContain('vectors/projection.v2.json');

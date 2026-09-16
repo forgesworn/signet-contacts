@@ -60,7 +60,9 @@ export interface ProjectedContact {
   linkedPubkeys?: string[];
 }
 /** C13: a projection is a SNAPSHOT, so the frontier says who published it and
- *  when. Newest wins by `(maxClock, publishedAt)`; there are no `opIds`. */
+ *  when. R-30: newest wins by `(publishedAt, maxClock)` — recency first, the
+ *  Lamport clock only as a same-second tiebreak, so a block published from a
+ *  device whose log is behind still applies. There are no `opIds`. */
 export interface ProjectionFrontier {
   maxClock: number; opCount: number; publishedAt: number; deviceId: string;  // 32 hex
 }

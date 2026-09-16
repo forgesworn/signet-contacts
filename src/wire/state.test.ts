@@ -41,7 +41,7 @@ describe('applyProjection', () => {
 
   it('ignores a projection whose frontier has gone backwards', () => {
     const first = applyProjection(emptyContactsState(), projection(), ISSUED + 1);
-    const stale = applyProjection(first, projection({ frontier: { maxClock: 4, opCount: 9, publishedAt: ISSUED, deviceId: DEVICE } }), ISSUED + 2);
+    const stale = applyProjection(first, projection({ frontier: { maxClock: 4, opCount: 9, publishedAt: ISSUED - 5, deviceId: DEVICE } }), ISSUED + 2);
     expect(stale).toBe(first);
   });
 
@@ -54,18 +54,43 @@ describe('applyProjection', () => {
     expect(again.projection?.expiresAt).toBe(EXPIRES + 10);
   });
 
-  it('breaks an equal-clock tie by publishedAt, in both directions (C13)', () => {
+  // R-30: safety first. A block published from a second device whose contacts
+  // log has not yet merged the first device's recent operations carries a
+  // Lamport frontier no higher than the one the consumer already holds — under
+  // the old `(maxClock, publishedAt)` order the whole projection, block
+  // included, was refused until some unrelated later change happened to be
+  // published. Recency decides; the Lamport clock only breaks a tie.
+  it('accepts a later-published projection whose Lamport clock is behind (R-30)', () => {
     const first = applyProjection(emptyContactsState(), projection(), ISSUED + 1);
-    const otherDeviceOlder = applyProjection(first, projection({
-      frontier: { maxClock: 5, opCount: 10, publishedAt: ISSUED - 50, deviceId: '3'.repeat(32) },
+    const laggingDeviceBlock = applyProjection(first, projection({
+      frontier: { maxClock: 2, opCount: 4, publishedAt: ISSUED + 30, deviceId: '3'.repeat(32) },
+      contacts: [contact('e'.repeat(32), true, 'f'.repeat(64))],
+    }), ISSUED + 31);
+    expect(laggingDeviceBlock).not.toBe(first);
+    expect(blockedSetOf(laggingDeviceBlock)).toEqual(new Set(['f'.repeat(64)]));
+  });
+
+  it('ignores an earlier-published projection even when its Lamport clock is ahead (R-30)', () => {
+    const first = applyProjection(emptyContactsState(), projection(), ISSUED + 1);
+    const staleReplay = applyProjection(first, projection({
+      frontier: { maxClock: 99, opCount: 200, publishedAt: ISSUED - 1, deviceId: '3'.repeat(32) },
       contacts: [],
     }), ISSUED + 2);
-    expect(otherDeviceOlder).toBe(first);
-    const otherDeviceNewer = applyProjection(first, projection({
-      frontier: { maxClock: 5, opCount: 10, publishedAt: ISSUED + 50, deviceId: '3'.repeat(32) },
+    expect(staleReplay).toBe(first);
+  });
+
+  it('breaks an equal-publishedAt tie by maxClock, in both directions (R-30)', () => {
+    const first = applyProjection(emptyContactsState(), projection(), ISSUED + 1);
+    const sameMomentLowerClock = applyProjection(first, projection({
+      frontier: { maxClock: 4, opCount: 9, publishedAt: ISSUED, deviceId: '3'.repeat(32) },
+      contacts: [],
+    }), ISSUED + 2);
+    expect(sameMomentLowerClock).toBe(first);
+    const sameMomentHigherClock = applyProjection(first, projection({
+      frontier: { maxClock: 6, opCount: 11, publishedAt: ISSUED, deviceId: '3'.repeat(32) },
       contacts: [],
     }), ISSUED + 3);
-    expect(otherDeviceNewer.projection?.contacts).toEqual([]);
+    expect(sameMomentHigherClock.projection?.contacts).toEqual([]);
   });
 
   it('replaces the blocked set when a newer projection un-blocks someone', () => {

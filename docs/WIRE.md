@@ -166,10 +166,23 @@ the field is simply not part of this wire, so the parser drops it and no
 consumer ever sees it.
 
 A projection is a **snapshot**: `frontier` says who published it and when.
-Newest wins by `(maxClock, publishedAt)` — `maxClock` alone cannot order two
-devices that legitimately reach the same clock, so ties break on
-`publishedAt`; an exact tie on both is not newer and is ignored. There is no
+Newest wins by `(publishedAt, maxClock)` — **`publishedAt` is compared first**
+and `maxClock` only breaks a tie between two devices that published in the same
+second; an exact tie on both is not newer and is ignored. There is no
 per-operation id list on the wire.
+
+The order is deliberately recency-first (R-30). `maxClock` measures how much of
+the owner's contact log the publishing DEVICE has seen, not how recent its
+snapshot is: a block entered on a second device that has not yet merged the
+first device's recent operations carries a clock no higher than one the
+consumer already holds, and a clock-first order would refuse that whole
+projection — the block with it — until some unrelated later change happened to
+be published. A consumer must not make safety state wait for the producer's own
+log to converge.
+
+A projection carrying `revoked: true` is exempt from this check entirely: a
+revoking producer may not know the consumer's frontier, and losing a revocation
+is far worse than applying one out of order.
 
 ### Proposal batch (plaintext of the proposal's NIP-44 ciphertext)
 

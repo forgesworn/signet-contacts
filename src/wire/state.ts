@@ -9,20 +9,30 @@
  *    no safety state, because the app looks like it is filtering right up until
  *    the moment it stops. Only a newer, accepted, non-revoked projection may
  *    shrink the Blocked set (spec §7.9, exploration §5.6).
- * 2. **Monotonic frontier, ordered by `(maxClock, publishedAt)` (C13).** A
- *    projection whose frontier is not strictly newer than the one already
- *    held is ignored — a relay may legitimately answer with an older
- *    replaceable event, and applying it would roll the directory back; an
- *    exact tie is likewise ignored rather than re-applied. `maxClock` alone
- *    is not enough: two of the owner's devices can reach the same clock, and
- *    then each would reject the other for ever, so the tie is broken by
- *    which snapshot was published later. This check still runs after a
- *    revocation — the held frontier then IS the revoking projection's
- *    frontier, so only a projection strictly newer than the one that
- *    revoked may un-revoke, and a stale relay replay standing behind the
- *    revocation can never resurrect the directory. A REVOCATION ITSELF is
- *    exempt: a revoking producer may not know the consumer's frontier, and
- *    losing a revocation is far worse than applying one out of order.
+ * 2. **Monotonic frontier, ordered by `(publishedAt, maxClock)` (R-30,
+ *    amending C13).** A projection whose frontier is not strictly newer than
+ *    the one already held is ignored — a relay may legitimately answer with
+ *    an older replaceable event, and applying it would roll the directory
+ *    back; an exact tie is likewise ignored rather than re-applied.
+ *
+ *    `publishedAt` is compared FIRST, and `maxClock` only breaks a tie,
+ *    because the Lamport clock measures how much of the owner's contacts log
+ *    a DEVICE has seen, not how recent its snapshot is. A block entered on a
+ *    second device that has not yet merged the first device's recent
+ *    operations carries a `maxClock` no higher than the one the consumer
+ *    already holds, so a clock-first order refused the whole projection —
+ *    block included — until some unrelated later change happened to be
+ *    published. Safety state must not wait for the contacts rail to
+ *    converge, so recency decides; when two devices publish in the same
+ *    second, the one that has seen more of the log wins.
+ *
+ *    This check still runs after a revocation — the held frontier then IS
+ *    the revoking projection's frontier, so only a projection strictly newer
+ *    than the one that revoked may un-revoke, and a stale relay replay
+ *    standing behind the revocation can never resurrect the directory. A
+ *    REVOCATION ITSELF is exempt: a revoking producer may not know the
+ *    consumer's frontier, and losing a revocation is far worse than applying
+ *    one out of order.
  * 3. **Freshness is advisory for reads, never for blocks.** `isFresh` tells an
  *    app its directory may be out of date; `blockedSetOf` is unconditional.
  */
@@ -57,16 +67,15 @@ export function applyProjection(
     };
   }
 
-  // C13: newest wins by `(maxClock, publishedAt)`. `maxClock` alone cannot
-  // order two of the owner's devices publishing the same grant — they can
-  // legitimately reach the same clock — so a tie is broken by which
-  // snapshot was published later; an exact tie is not newer and is ignored.
-  // Runs regardless of `state.revoked` — see rule 2 above.
+  // R-30: newest wins by `(publishedAt, maxClock)` — recency first, the
+  // Lamport clock only as the tiebreak for two devices publishing in the
+  // same second. An exact tie on both is not newer and is ignored. Runs
+  // regardless of `state.revoked` — see rule 2 above.
   if (state.projection !== null) {
     const held = state.projection.frontier;
     const incoming = projection.frontier;
-    const notNewer = incoming.maxClock < held.maxClock
-      || (incoming.maxClock === held.maxClock && incoming.publishedAt <= held.publishedAt);
+    const notNewer = incoming.publishedAt < held.publishedAt
+      || (incoming.publishedAt === held.publishedAt && incoming.maxClock <= held.maxClock);
     if (notNewer) return state;
   }
 
