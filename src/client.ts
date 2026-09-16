@@ -100,11 +100,15 @@ export interface SignetContactsClient {
    * asking; `pollMs` (default `DEFAULT_LIVE_POLL_MS`) re-fetches on a timer in
    * case the socket is down, the transport has no `subscribe` at all, or a
    * relay simply never pushed. `onRevoked` fires from whichever path sees the
-   * revocation first, exactly once either way.
+   * revocation first, once per revocation — a repeated tombstone does not
+   * fire it twice, and a grant un-revoked by a newer projection and revoked
+   * again fires it again.
    *
    * One subscription per client: calling `start` again replaces the previous
-   * one. The returned function is the same as `stop`, for callers that prefer
-   * an unsubscribe handle.
+   * one. The returned function is THIS subscription's own handle — it tears
+   * down only while this subscription is still the current one, so a cleanup
+   * that runs after a later `start` (a React effect's teardown, say) is inert
+   * rather than killing the live subscription.
    */
   start(pairing: PairingV2, opts?: { pollMs?: number }): () => void;
   /** Stop the live subscription and the poll fallback. Idempotent; safe to
@@ -258,6 +262,13 @@ export function createSignetContactsClient(opts: {
 
   let unsubscribe: (() => void) | null = null;
   let pollTimer: ReturnType<typeof setInterval> | null = null;
+  /** Bumped on every teardown, so a `stop` handle returned by an earlier
+   *  `start` can tell whether the subscription it was issued for is still the
+   *  current one. */
+  let liveGeneration = 0;
+  /** When the live socket last delivered anything, so a poll tick that the
+   *  subscription has plainly already covered can be skipped. */
+  let lastLiveDeliveryMs = 0;
   /** Every ingest — pushed or polled — runs through this one chain, so two
    *  events arriving together can never interleave their read-modify-write of
    *  `state` (the frontier rule only orders correctly against the state the
@@ -265,6 +276,7 @@ export function createSignetContactsClient(opts: {
   let ingestQueue: Promise<unknown> = Promise.resolve();
 
   function stopLive(): void {
+    liveGeneration += 1;
     if (unsubscribe) {
       try { unsubscribe(); } catch { /* already closed */ }
       unsubscribe = null;
@@ -329,11 +341,21 @@ export function createSignetContactsClient(opts: {
         // not be handed a projection that was never actually applied.
         if (next === state) return null;
         state = next;
+        // `revokedAnnounced` TRACKS `state.revoked` rather than latching true
+        // for the life of the client. A revoked grant can be un-revoked by a
+        // strictly newer projection (see `applyProjection` rule 2), and a
+        // latched flag then swallowed the NEXT revocation entirely: the state
+        // went back to revoked and the app was never told, which is precisely
+        // the "keeps reading a directory that ended" failure `onRevoked`
+        // exists to prevent. Each rising edge announces once; the same
+        // tombstone arriving again (a relay replay, or the poll racing the
+        // live socket) is not an edge.
+        const alreadyAnnounced = revokedAnnounced;
+        revokedAnnounced = state.revoked;
         reconcilePending(projection, nowSec);
         await persistState();
         await persistPending(pairing.grantId);
-        if (state.revoked && !revokedAnnounced) {
-          revokedAnnounced = true;
+        if (state.revoked && !alreadyAnnounced) {
           for (const cb of revokedListeners) cb(state.grantId ?? projection.grantId);
         }
         return projection;
@@ -434,12 +456,15 @@ export function createSignetContactsClient(opts: {
       // One subscription per client: a second `start` replaces the first
       // rather than quietly leaving a socket and a timer behind.
       stopLive();
+      const generation = liveGeneration;
       const pollMs = startOpts?.pollMs ?? DEFAULT_LIVE_POLL_MS;
       const filter = projectionFilter(pairing.railPubkey, pairing.grantId);
+      lastLiveDeliveryMs = 0;
 
       if (typeof relay.subscribe === 'function') {
         try {
           unsubscribe = relay.subscribe(filter, [pairing.relay], (event) => {
+            lastLiveDeliveryMs = Date.now();
             // Never let a pushed event reject into the transport's own
             // callback — a relay's socket handler is not this SDK's error
             // channel, and there is nowhere to report it to.
@@ -453,6 +478,11 @@ export function createSignetContactsClient(opts: {
       }
 
       pollTimer = setInterval(() => {
+        // A socket that delivered within the last interval is plainly alive,
+        // and re-fetching the same replaceable event behind it buys nothing.
+        // The poll is the safety net for a socket that has gone quiet, not a
+        // second reader running beside a working one.
+        if (unsubscribe !== null && Date.now() - lastLiveDeliveryMs < pollMs) return;
         void (async () => {
           try {
             const event = await relay.fetchNewest(filter, [pairing.relay], pairing.railPubkey);
@@ -463,7 +493,11 @@ export function createSignetContactsClient(opts: {
         })();
       }, pollMs);
 
-      return stopLive;
+      // A handle for THIS subscription, not the client's one teardown
+      // function: a cleanup kept from an earlier `start` (a React effect
+      // whose cleanup runs after the next effect has already re-subscribed)
+      // must not tear down whatever is current.
+      return () => { if (generation === liveGeneration) stopLive(); };
     },
 
     stop() { stopLive(); },

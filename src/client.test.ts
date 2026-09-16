@@ -555,6 +555,104 @@ describe('start / stop — live updates with a poll fallback (R-32)', () => {
     expect(fetchNewest.mock.calls.length).toBe(afterStop);
   });
 
+  // Round 2: `start` returned the ONE module-level teardown closure, so a
+  // handle kept from an earlier `start` tore down whatever subscription was
+  // current — the exact shape of a React effect whose cleanup runs after the
+  // next effect has already re-subscribed.
+  it('gives each start its own handle, so a stale one cannot tear down a later subscription', () => {
+    const closes = [vi.fn(), vi.fn()];
+    let index = 0;
+    const client = createSignetContactsClient({
+      signer: fakeSigner(),
+      relay: {
+        fetchNewest: async () => null,
+        publish: async () => true,
+        subscribe: () => closes[index++]!,
+      },
+    });
+    const stopFirst = client.start(PAIRING, { pollMs: 60_000 });
+    const stopSecond = client.start(PAIRING, { pollMs: 60_000 });
+    expect(closes[0]).toHaveBeenCalledTimes(1);   // replaced by the second start
+    // The stale handle must be inert, not a teardown of the live subscription.
+    stopFirst();
+    expect(closes[1]).not.toHaveBeenCalled();
+    stopSecond();
+    expect(closes[1]).toHaveBeenCalledTimes(1);
+  });
+
+  // Round 2: `revokedAnnounced` latched true for the life of the client, so a
+  // grant that was revoked, un-revoked by a strictly newer projection (which
+  // `applyProjection` allows) and revoked again told the app about the first
+  // revocation only — while the state itself had changed under it.
+  it('fires onRevoked on every revocation edge, and never twice for one', async () => {
+    const signer = fakeSigner();
+    const revocation = await sealProjection(signer, projection({
+      contacts: [], revoked: true,
+      frontier: { maxClock: 5, opCount: 10, publishedAt: 1_700_000_000, deviceId: '2'.repeat(32) },
+    }));
+    const unrevoke = await sealProjection(signer, projection({
+      frontier: { maxClock: 6, opCount: 11, publishedAt: 1_700_000_010, deviceId: '2'.repeat(32) },
+    }));
+    const secondRevocation = await sealProjection(signer, projection({
+      contacts: [], revoked: true,
+      frontier: { maxClock: 7, opCount: 12, publishedAt: 1_700_000_020, deviceId: '2'.repeat(32) },
+    }));
+    let serve = revocation;
+    const onRevoked = vi.fn();
+    const client = createSignetContactsClient({
+      signer,
+      relay: {
+        fetchNewest: async () => signed(projectionEventTemplate(RAIL, GRANT, 1, serve)),
+        publish: async () => true,
+      },
+      now: () => 1_700_000_100,
+    });
+    client.onRevoked(onRevoked);
+
+    await client.fetchProjection(PAIRING);
+    expect(onRevoked).toHaveBeenCalledTimes(1);
+    // The same tombstone arriving again (a relay replay, or the poll racing
+    // the live socket) is not a second revocation.
+    await client.fetchProjection(PAIRING);
+    expect(onRevoked).toHaveBeenCalledTimes(1);
+
+    serve = unrevoke;
+    await client.fetchProjection(PAIRING);
+    expect(client.getState().revoked).toBe(false);
+    expect(onRevoked).toHaveBeenCalledTimes(1);
+
+    serve = secondRevocation;
+    await client.fetchProjection(PAIRING);
+    expect(client.getState().revoked).toBe(true);
+    expect(onRevoked).toHaveBeenCalledTimes(2);
+  });
+
+  it('skips a poll tick that the live socket has already covered', async () => {
+    const signer = fakeSigner();
+    const content = await sealProjection(signer, projection());
+    const fetchNewest = vi.fn(async () => null);
+    let push: ((e: SignedNostrEvent) => void) | null = null;
+    const client = createSignetContactsClient({
+      signer,
+      relay: {
+        fetchNewest, publish: async () => true,
+        subscribe: (_f, _r, onEvent) => { push = onEvent; return () => {}; },
+      },
+      now: () => 1_700_000_100,
+    });
+    client.start(PAIRING, { pollMs: 200 });
+    // Deliver half an interval in, so the tick at 200ms sees a socket that
+    // has plainly just worked.
+    await new Promise((resolve) => { setTimeout(resolve, 100); });
+    push!(signed(projectionEventTemplate(RAIL, GRANT, 1_700_000_000, content)));
+    await vi.waitFor(() => expect(client.getState().projection?.contacts).toHaveLength(1));
+    await new Promise((resolve) => { setTimeout(resolve, 180); });
+    expect(fetchNewest).not.toHaveBeenCalled();
+    // Once the socket goes quiet for a whole interval, the safety net resumes.
+    await vi.waitFor(() => expect(fetchNewest).toHaveBeenCalled(), { timeout: 1500 });
+    client.stop();
+  });
+
   it('replaces the previous subscription when start is called again, and stop is idempotent', () => {
     const closes = [vi.fn(), vi.fn()];
     let index = 0;

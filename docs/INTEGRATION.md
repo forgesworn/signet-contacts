@@ -208,7 +208,8 @@ const forget = client.onRevoked((grantId) => {
 ```
 
 `onRevoked` fires from whichever path sees the revocation first — a live push or
-the next fetch — and exactly once either way. It does not fire on its own:
+the next fetch — once per revocation, so a repeated tombstone does not fire it
+twice and a re-revocation after an un-revoke does fire it again. It does not fire on its own:
 something has to be reading the rail, which is what `client.start()` below is
 for. `onRevoked` returns a function that forgets the listener; it does not stop
 the subscription.
@@ -223,12 +224,13 @@ idempotent, and safe to call when `start` was never called:
 ```ts
 useEffect(() => {
   const stop = client.start(pairing, { pollMs: 60_000 }); // 60_000 is the default
-  return stop;                                            // same function as client.stop
+  return stop;   // this subscription's own handle: inert once a later start replaced it
 }, [client, pairing]);
 ```
 
-A transport with no `subscribe` (or one whose socket is down) leaves the poll
-doing the whole job — that is a documented degraded mode, not a failure. One
+`client.stop()` does the same teardown for a client you are disposing of
+outright, and is idempotent. A transport with no `subscribe` (or one whose
+socket is down) leaves the poll doing the whole job — that is a documented degraded mode, not a failure. One
 subscription per client: calling `start` again replaces the previous one.
 
 ## Summary

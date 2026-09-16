@@ -42,8 +42,10 @@ bundled `SimplePool` adapter implements it over `querySync` (falling back to one
 grant's projection slot through `RelayIo.subscribe` and polls every `pollMs`
 (default 60 000 ms) as a fallback, so a new projection and a revocation
 tombstone both arrive without the app asking. `onRevoked` fires from the live
-path and the fetch path alike, exactly once. `client.stop()` unsubscribes and
-clears the poll, and is idempotent. Previously `RelayIo.subscribe` was declared
+path and the fetch path alike, once per revocation (a repeated tombstone does
+not fire twice; a re-revocation after an un-revoke does). `client.stop()` unsubscribes and
+clears the poll, and is idempotent; `start` returns a handle scoped to its own
+subscription, and a poll tick the live socket has already covered is skipped. Previously `RelayIo.subscribe` was declared
 and implemented but never called, so a consumer that wired `onRevoked` and
 waited learned nothing until it happened to fetch again.
 

@@ -147,8 +147,12 @@ which bounds every individual pool call.
 every `pollMs` (default 60 000 ms) as a fallback, so a new projection and a
 revocation tombstone both arrive without the app asking; `client.stop()` ends
 both. A transport with no `subscribe` runs on the poll alone. `onRevoked` fires
-from whichever path sees the revocation first, exactly once either way — but
-only while something is reading the rail, which is what `start` is for.
+from whichever path sees the revocation first, once per revocation: a repeated
+tombstone does not fire it twice, and a grant that is un-revoked by a newer
+projection and then revoked again fires it again. It only fires while something
+is reading the rail, which is what `start` is for. `start` returns a handle for
+that subscription — an old handle is inert once a later `start` has replaced
+it, so a cleanup that runs late cannot tear down the current one.
 
 ## The freshness rule
 
