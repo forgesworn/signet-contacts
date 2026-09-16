@@ -16,6 +16,7 @@ calls (`buildPairingUri`/`awaitPairingAck`, `fetchProjection`, `getBlockedSet`,
 ```ts
 import { SimplePool } from 'nostr-tools/pool';
 import { createSignetContactsClient } from '@forgesworn/signet-contacts';
+import type { StorageIo } from '@forgesworn/signet-contacts';
 import { createSimplePoolRelayIo } from '@forgesworn/signet-contacts/adapters/nostr-tools';
 import type { FlockSigner } from './signer';
 
@@ -24,6 +25,13 @@ function createContactsClient(signer: FlockSigner, storage: StorageIo) {
   return createSignetContactsClient({ signer, relay, storage });
 }
 ```
+
+`storage` is not decoration. Without it the client falls back to an in-memory
+store and the sticky Blocked set — the one piece of state that must never decay
+— is lost on every restart. Two async methods, `get(key)` and `set(key, value)`,
+are the whole contract; see the README's "Storage, and the sticky Blocked set"
+for what is kept and what is not. Every option and its default is in the
+README's options table.
 
 ## Step 1 — Pair
 
@@ -139,8 +147,10 @@ function renderRoster(client: SignetContactsClient, circle: Circle) {
 
 Blocked is **sticky**: it survives an expired projection and a revoked grant.
 Never clear it on anything but a newer, non-revoked projection that itself
-narrows it — the SDK's `blockedSetOf` already enforces this; do not maintain a
-second copy of it yourself.
+narrows it. `applyProjection` is what enforces that — it carries the previous
+`blockedPubkeys` through a revocation and only replaces the set when a strictly
+newer, non-revoked projection is accepted; `blockedSetOf` just hands you a copy
+of whatever that left. Do not maintain a second copy of it yourself.
 
 ## Step 5 — Propose, and show what's outstanding
 
@@ -174,7 +184,18 @@ function renderOutstandingRequests(client: SignetContactsClient) {
 ```
 
 An `add-ken` proposal clears itself out of `pendingProposals()` the moment a
-later projection carries that pubkey — there is nothing to reconcile by hand.
+later projection carries that pubkey, and a `rename-app-label` clears when the
+named contact comes back showing that label — there is nothing to reconcile by
+hand.
+
+**The SDK also gives up on its own.** A pending row older than
+`maxPendingStalenessSeconds` (default `604800` — seven days) is dropped during
+the next reconcile, whether or not it was ever applied. This wire has no
+"declined" reply by design, so an unanswered proposal is indistinguishable from
+a refused one, and showing "asked 14 months ago" for ever would be its own kind
+of lie. If your UI wants a different horizon, set the option; if it wants to
+show older rows, keep your own copy at send time. Reconciliation happens when a
+projection is accepted, so a client that never fetches never drops anything.
 
 Finally, wire up revocation. It clears the directory, but **keeps** the
 Blocked set, and should tell the person plainly which connection ended:

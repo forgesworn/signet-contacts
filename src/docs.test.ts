@@ -110,6 +110,68 @@ describe('README.md', () => {
   });
 });
 
+describe('README.md — storage, options and the persistence contract (C-I1, C-I3, C-M3)', () => {
+  it('quick start loads persisted state and passes its own requested capabilities', () => {
+    const quickStart = readme.slice(readme.indexOf('## Quick start'), readme.indexOf('## Storage'));
+    expect(quickStart).toContain('client.load(');
+    expect(quickStart).toContain('requestedCapabilities');
+    expect(quickStart).toContain('storage');
+  });
+
+  it('says the default storage is in-memory and what that costs', () => {
+    expect(readme).toMatch(/in-memory/i);
+    expect(readme).toMatch(/Blocked set[^\n]*restart|restart[^\n]*Blocked/i);
+  });
+
+  it('documents every client and adapter option with its default', () => {
+    for (const option of [
+      'storage', 'now', 'nowMs', 'maxPendingStalenessSeconds',
+      'timeoutMs', 'pollMs', 'requestedCapabilities',
+    ]) {
+      expect(readme).toContain(option);
+    }
+    for (const dflt of ['604800', '120000', '2000', '60000', '8000']) {
+      expect(readme).toContain(dflt);
+    }
+  });
+});
+
+describe('docs/INTEGRATION.md — pending proposals and the Blocked set (C-I4, C-M1, C-M2)', () => {
+  it('documents the seven-day pending drop and names the option', () => {
+    expect(integration).toContain('maxPendingStalenessSeconds');
+    expect(integration).toContain('604800');
+    expect(integration).toMatch(/seven days/i);
+  });
+
+  it('credits applyProjection, not blockedSetOf, with enforcing stickiness', () => {
+    const para = integration.slice(integration.indexOf('Blocked is **sticky**'));
+    expect(para.slice(0, 600)).toContain('applyProjection');
+  });
+
+  it('imports every type its own setup block uses', () => {
+    expect(integration).toContain("import type { StorageIo }");
+  });
+});
+
+describe('docs/WIRE.md — truncation order and producer limits (C-I5, C-I6)', () => {
+  it('states the drop order the producer actually applies', () => {
+    const limits = wire.slice(wire.indexOf('## 8. Hard limits'));
+    expect(limits).toMatch(/kept\*?\*? most-recently-/i);
+    expect(limits).toMatch(/least\*?\*? recently updated/i);
+    // R-28(c): app-created records go first, whatever their recency.
+    expect(limits).toContain('R-28c');
+  });
+
+  it('names the three producer-side limits with their numbers', () => {
+    const limits = wire.slice(wire.indexOf('## 8. Hard limits'));
+    expect(limits).toContain('MAX_APP_LABELS_PER_GRANT');
+    expect(limits).toContain('16');
+    expect(limits).toContain('CONTACT_GRANT_V2_CAP');
+    expect(limits).toContain('10');
+    expect(limits).toContain('604800');
+  });
+});
+
 describe('README.md and docs/INTEGRATION.md — live updates (R-32)', () => {
   it('describe start/stop as live with a poll fallback, and the default cadence', () => {
     for (const doc of [readme, integration]) {

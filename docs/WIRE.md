@@ -289,9 +289,17 @@ capability later is additive, not a breaking change.
   canonical serialised body, enforced by `buildProjection` (throws above it),
   not merely documented. See §1 for why this number and not 65536 or 65535.
 - **`truncated: true`** — set by the producer when it had to drop contacts to
-  fit `MAX_WIRE_BYTES`. Contacts are dropped deterministically (most recently
-  updated first, then `contactId`), and this flag is never silent: a consumer
-  should surface it as "this list may be incomplete".
+  fit `MAX_WIRE_BYTES`. The drop order is deterministic and is the OPPOSITE way
+  round from how it reads at a glance: contacts are **kept** most-recently-
+  updated first (`contactId`, compared by code point, as the tiebreak), so it is
+  the **least** recently updated that go. Two further rules sit above that
+  ordering: a record created by a connected app (an applied `add-ken`) is
+  dropped before any record the owner created (R-28c), so one app's volume can
+  never evict the owner's real contacts from a DIFFERENT app's projection; and
+  `MAX_CONTACTS_PER_PROJECTION` is applied in the same order, so ">2000
+  contacts" is handled by this rule rather than by the parser's silent cap. The
+  flag is never silent: a consumer should surface it as "this list may be
+  incomplete".
 - **`MAX_PROPOSALS_PER_BATCH = 50`** — the most proposals one signed batch may
   carry; `buildProposalBatch` throws above it.
 - **`MAX_RELAY_LEN = 256`** — on the pairing URI's `relay` and the ack's
@@ -305,6 +313,24 @@ capability later is additive, not a breaking change.
   at.
 - **`ACK_CANDIDATE_LIMIT = 10`** — ack candidates a consumer considers per
   poll (§3).
+
+### Producer-side limits a consumer meets in normal use
+
+These are enforced by signet-app rather than by this package, and there is no
+error reply on the wire for any of them — which is exactly why they are
+normative here. An implementer who does not know them will build a UI that
+waits for something that is never coming.
+
+- **A proposal older than `MAX_STALENESS_SECONDS` (604800 — 7 days) is
+  refused**, as is one stamped beyond a small future-skew window. `createdAt` is
+  the producer's clock check, not a hint.
+- **At most 16 app labels per grant** (`MAX_APP_LABELS_PER_GRANT`). A 17th
+  `rename-app-label` is accepted onto the wire, queued, and never applied. It
+  will sit in `pendingProposals()` until the seven-day drop.
+- **At most 10 active grants per owner** (`CONTACT_GRANT_V2_CAP`). A consumer
+  experiences the eleventh as `awaitPairingAck` returning `null`, the same as a
+  timeout or a refusal — tell the person their Signet may be at its connected-
+  app limit rather than only "timed out".
 
 ## 9. Vectors
 
