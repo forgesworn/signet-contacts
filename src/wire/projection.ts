@@ -143,7 +143,6 @@ export function parseProjection(json: string): ContactProjectionV2 | null {
 
   if (o.v !== 2) return null;
   if (!isHex(o.grantId, 32)) return null;
-  if (!isHex(o.ownerPubkey, 64)) return null;
   if (!Array.isArray(o.scopes)) return null;
   if (typeof o.issuedAt !== 'number' || !Number.isInteger(o.issuedAt) || o.issuedAt < 0) return null;
   if (typeof o.expiresAt !== 'number' || !Number.isInteger(o.expiresAt) || o.expiresAt < o.issuedAt) return null;
@@ -179,7 +178,6 @@ export function parseProjection(json: string): ContactProjectionV2 | null {
   const projection: ContactProjectionV2 = {
     v: 2,
     grantId: o.grantId,
-    ownerPubkey: o.ownerPubkey,
     scopes,
     frontier: {
       maxClock: frontier.maxClock, opCount: frontier.opCount,
@@ -229,7 +227,6 @@ function bodyOf(p: ContactProjectionV2, scopes: readonly Capability[], contacts:
   const body: Record<string, unknown> = {
     v: 2,
     grantId: p.grantId,
-    ownerPubkey: p.ownerPubkey,
     scopes,
     frontier: {
       maxClock: p.frontier.maxClock, opCount: p.frontier.opCount,

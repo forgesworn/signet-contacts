@@ -16,7 +16,7 @@ function contact(id: string, blocked: boolean, pubkey: string): ProjectedContact
 }
 function projection(over: Partial<ContactProjectionV2> = {}): ContactProjectionV2 {
   return {
-    v: 2, grantId: GRANT, ownerPubkey: '1'.repeat(64),
+    v: 2, grantId: GRANT,
     scopes: ['signet.contacts.read:directory', 'signet.contacts.blocks.read'],
     frontier: { maxClock: 5, opCount: 10, publishedAt: ISSUED, deviceId: DEVICE }, issuedAt: ISSUED, expiresAt: EXPIRES,
     contacts: [contact('a'.repeat(32), false, 'b'.repeat(64)), contact('c'.repeat(32), true, 'd'.repeat(64))],

@@ -1,11 +1,11 @@
 {
   "description": "ContactProjectionV2 at full scope, at blocks-only scope, truncated, and as a revocation",
+  "regenerated": "2026-09-16: ownerPubkey removed (R-31). The directory owner's persona pubkey is no longer on this wire \u2014 it was stable across every grant on a directory (a one-line join for two colluding apps) and, on a dependant directory, a minor's long-lived public identity. This is the one authorised regeneration of this vector; signet-app regenerates its own parity fixtures to match.",
   "full": {
-    "plaintext": "{\"v\":2,\"grantId\":\"ffffffffffffffffffffffffffffffff\",\"ownerPubkey\":\"1111111111111111111111111111111111111111111111111111111111111111\",\"scopes\":[\"signet.contacts.read:directory\",\"signet.contacts.read:roles\",\"signet.contacts.blocks.read\"],\"frontier\":{\"maxClock\":42,\"opCount\":137,\"publishedAt\":1700000000,\"deviceId\":\"22222222222222222222222222222222\"},\"issuedAt\":1700000000,\"expiresAt\":1700021600,\"contacts\":[{\"contactId\":\"13993eeedd697109d6e61088138dc959\",\"type\":\"person\",\"effectiveTier\":\"kith\",\"tierSource\":\"direct\",\"blocked\":false,\"identities\":[{\"pubkey\":\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"verification\":\"proven\"}],\"displayName\":\"Ada\",\"roles\":[\"coach\"]},{\"contactId\":\"d86cbd5e6c032b8436e945a33c587179\",\"type\":\"person\",\"effectiveTier\":\"none\",\"tierSource\":\"guardian-limited\",\"blocked\":true,\"identities\":[{\"pubkey\":\"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\",\"verification\":\"proven\"}],\"linkedPubkeys\":[\"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\"]}]}",
+    "plaintext": "{\"v\":2,\"grantId\":\"ffffffffffffffffffffffffffffffff\",\"scopes\":[\"signet.contacts.read:directory\",\"signet.contacts.read:roles\",\"signet.contacts.blocks.read\"],\"frontier\":{\"maxClock\":42,\"opCount\":137,\"publishedAt\":1700000000,\"deviceId\":\"22222222222222222222222222222222\"},\"issuedAt\":1700000000,\"expiresAt\":1700021600,\"contacts\":[{\"contactId\":\"13993eeedd697109d6e61088138dc959\",\"type\":\"person\",\"effectiveTier\":\"kith\",\"tierSource\":\"direct\",\"blocked\":false,\"identities\":[{\"pubkey\":\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"verification\":\"proven\"}],\"displayName\":\"Ada\",\"roles\":[\"coach\"]},{\"contactId\":\"d86cbd5e6c032b8436e945a33c587179\",\"type\":\"person\",\"effectiveTier\":\"none\",\"tierSource\":\"guardian-limited\",\"blocked\":true,\"identities\":[{\"pubkey\":\"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\",\"verification\":\"proven\"}],\"linkedPubkeys\":[\"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\"]}]}",
     "parsed": {
       "v": 2,
       "grantId": "ffffffffffffffffffffffffffffffff",
-      "ownerPubkey": "1111111111111111111111111111111111111111111111111111111111111111",
       "scopes": [
         "signet.contacts.read:directory",
         "signet.contacts.read:roles",
@@ -57,11 +57,10 @@
     }
   },
   "blocksOnly": {
-    "plaintext": "{\"v\":2,\"grantId\":\"ffffffffffffffffffffffffffffffff\",\"ownerPubkey\":\"1111111111111111111111111111111111111111111111111111111111111111\",\"scopes\":[\"signet.contacts.blocks.read\"],\"frontier\":{\"maxClock\":42,\"opCount\":137,\"publishedAt\":1700000000,\"deviceId\":\"22222222222222222222222222222222\"},\"issuedAt\":1700000000,\"expiresAt\":1700021600,\"contacts\":[{\"contactId\":\"d86cbd5e6c032b8436e945a33c587179\",\"type\":\"person\",\"effectiveTier\":\"none\",\"tierSource\":\"guardian-limited\",\"blocked\":true,\"identities\":[{\"pubkey\":\"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\",\"verification\":\"proven\"}],\"linkedPubkeys\":[\"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\"]}]}",
+    "plaintext": "{\"v\":2,\"grantId\":\"ffffffffffffffffffffffffffffffff\",\"scopes\":[\"signet.contacts.blocks.read\"],\"frontier\":{\"maxClock\":42,\"opCount\":137,\"publishedAt\":1700000000,\"deviceId\":\"22222222222222222222222222222222\"},\"issuedAt\":1700000000,\"expiresAt\":1700021600,\"contacts\":[{\"contactId\":\"d86cbd5e6c032b8436e945a33c587179\",\"type\":\"person\",\"effectiveTier\":\"none\",\"tierSource\":\"guardian-limited\",\"blocked\":true,\"identities\":[{\"pubkey\":\"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\",\"verification\":\"proven\"}],\"linkedPubkeys\":[\"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\"]}]}",
     "parsed": {
       "v": 2,
       "grantId": "ffffffffffffffffffffffffffffffff",
-      "ownerPubkey": "1111111111111111111111111111111111111111111111111111111111111111",
       "scopes": [
         "signet.contacts.blocks.read"
       ],
@@ -94,11 +93,10 @@
     }
   },
   "revocation": {
-    "plaintext": "{\"v\":2,\"grantId\":\"ffffffffffffffffffffffffffffffff\",\"ownerPubkey\":\"1111111111111111111111111111111111111111111111111111111111111111\",\"scopes\":[\"signet.contacts.read:directory\",\"signet.contacts.read:roles\",\"signet.contacts.blocks.read\"],\"frontier\":{\"maxClock\":42,\"opCount\":137,\"publishedAt\":1700000000,\"deviceId\":\"22222222222222222222222222222222\"},\"issuedAt\":1700000000,\"expiresAt\":1700021600,\"contacts\":[],\"revoked\":true}",
+    "plaintext": "{\"v\":2,\"grantId\":\"ffffffffffffffffffffffffffffffff\",\"scopes\":[\"signet.contacts.read:directory\",\"signet.contacts.read:roles\",\"signet.contacts.blocks.read\"],\"frontier\":{\"maxClock\":42,\"opCount\":137,\"publishedAt\":1700000000,\"deviceId\":\"22222222222222222222222222222222\"},\"issuedAt\":1700000000,\"expiresAt\":1700021600,\"contacts\":[],\"revoked\":true}",
     "parsed": {
       "v": 2,
       "grantId": "ffffffffffffffffffffffffffffffff",
-      "ownerPubkey": "1111111111111111111111111111111111111111111111111111111111111111",
       "scopes": [
         "signet.contacts.read:directory",
         "signet.contacts.read:roles",
@@ -117,11 +115,10 @@
     }
   },
   "truncated": {
-    "plaintext": "{\"v\":2,\"grantId\":\"ffffffffffffffffffffffffffffffff\",\"ownerPubkey\":\"1111111111111111111111111111111111111111111111111111111111111111\",\"scopes\":[\"signet.contacts.read:directory\",\"signet.contacts.read:roles\",\"signet.contacts.blocks.read\"],\"frontier\":{\"maxClock\":42,\"opCount\":137,\"publishedAt\":1700000000,\"deviceId\":\"22222222222222222222222222222222\"},\"issuedAt\":1700000000,\"expiresAt\":1700021600,\"contacts\":[{\"contactId\":\"13993eeedd697109d6e61088138dc959\",\"type\":\"person\",\"effectiveTier\":\"kith\",\"tierSource\":\"direct\",\"blocked\":false,\"identities\":[{\"pubkey\":\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"verification\":\"proven\"}],\"displayName\":\"Ada\",\"roles\":[\"coach\"]}],\"truncated\":true}",
+    "plaintext": "{\"v\":2,\"grantId\":\"ffffffffffffffffffffffffffffffff\",\"scopes\":[\"signet.contacts.read:directory\",\"signet.contacts.read:roles\",\"signet.contacts.blocks.read\"],\"frontier\":{\"maxClock\":42,\"opCount\":137,\"publishedAt\":1700000000,\"deviceId\":\"22222222222222222222222222222222\"},\"issuedAt\":1700000000,\"expiresAt\":1700021600,\"contacts\":[{\"contactId\":\"13993eeedd697109d6e61088138dc959\",\"type\":\"person\",\"effectiveTier\":\"kith\",\"tierSource\":\"direct\",\"blocked\":false,\"identities\":[{\"pubkey\":\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"verification\":\"proven\"}],\"displayName\":\"Ada\",\"roles\":[\"coach\"]}],\"truncated\":true}",
     "parsed": {
       "v": 2,
       "grantId": "ffffffffffffffffffffffffffffffff",
-      "ownerPubkey": "1111111111111111111111111111111111111111111111111111111111111111",
       "scopes": [
         "signet.contacts.read:directory",
         "signet.contacts.read:roles",
@@ -159,7 +156,8 @@
   },
   "malformed": [
     "{\"v\":1,\"grantId\":\"ffffffffffffffffffffffffffffffff\"}",
-    "{\"v\":2,\"grantId\":\"short\",\"ownerPubkey\":\"1111111111111111111111111111111111111111111111111111111111111111\",\"scopes\":[],\"frontier\":{\"maxClock\":1,\"opCount\":1,\"publishedAt\":1,\"deviceId\":\"22222222222222222222222222222222\"},\"issuedAt\":1,\"expiresAt\":2,\"contacts\":[]}",
+    "{\"v\":2,\"grantId\":\"short\",\"scopes\":[],\"frontier\":{\"maxClock\":1,\"opCount\":1,\"publishedAt\":1,\"deviceId\":\"22222222222222222222222222222222\"},\"issuedAt\":1,\"expiresAt\":2,\"contacts\":[]}",
+    "{\"v\":2,\"grantId\":\"ffffffffffffffffffffffffffffffff\",\"ownerPubkey\":\"1111111111111111111111111111111111111111111111111111111111111111\",\"scopes\":[],\"frontier\":{\"maxClock\":1,\"opCount\":1,\"publishedAt\":1,\"deviceId\":\"22222222222222222222222222222222\"},\"issuedAt\":1,\"expiresAt\":2,\"contacts\":[]}",
     "[]"
   ]
 }

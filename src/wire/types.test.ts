@@ -22,7 +22,6 @@ describe('wire types', () => {
     const projection: ContactProjectionV2 = {
       v: 2,
       grantId: 'f'.repeat(32),
-      ownerPubkey: '1'.repeat(64),
       scopes: ['signet.contacts.read:directory'],
       frontier: { maxClock: 7, opCount: 12, publishedAt: 1_700_000_000, deviceId: '2'.repeat(32) },
       issuedAt: 1_700_000_000,

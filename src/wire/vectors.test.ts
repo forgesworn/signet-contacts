@@ -17,7 +17,6 @@ const NOW = 1_700_000_000;
 const GRANT = 'f'.repeat(32);
 const APP = 'a'.repeat(64);
 const RAIL = 'b'.repeat(64);
-const OWNER = '1'.repeat(64);
 const DEVICE = '2'.repeat(32);
 const CHALLENGE = 'D'.repeat(32);
 const WRITE = process.env.WRITE_VECTORS === '1';
@@ -95,7 +94,7 @@ describe('vectors', () => {
 
   it('freezes a full projection, a blocks-only projection and a revocation', () => {
     const full: ContactProjectionV2 = {
-      v: 2, grantId: GRANT, ownerPubkey: OWNER,
+      v: 2, grantId: GRANT,
       scopes: ['signet.contacts.read:directory', 'signet.contacts.read:roles', 'signet.contacts.blocks.read'],
       frontier: { maxClock: 42, opCount: 137, publishedAt: NOW, deviceId: DEVICE }, issuedAt: NOW, expiresAt: NOW + 21600,
       contacts: [
@@ -128,13 +127,18 @@ describe('vectors', () => {
 
     frozen('vectors/projection.v2.json', {
       description: 'ContactProjectionV2 at full scope, at blocks-only scope, truncated, and as a revocation',
+      regenerated: '2026-09-16: ownerPubkey removed (R-31). The directory owner\'s persona pubkey is no longer on this wire — it was stable across every grant on a directory (a one-line join for two colluding apps) and, on a dependant directory, a minor\'s long-lived public identity. This is the one authorised regeneration of this vector; signet-app regenerates its own parity fixtures to match.',
       full: { plaintext: buildProjection(full), parsed: full },
       blocksOnly: { plaintext: buildProjection(blocksOnly), parsed: blocksOnly },
       revocation: { plaintext: buildProjection(revocation), parsed: revocation },
       truncated: { plaintext: buildProjection(truncated), parsed: truncated },
       malformed: [
         '{"v":1,"grantId":"' + GRANT + '"}',
-        '{"v":2,"grantId":"short","ownerPubkey":"' + OWNER + '","scopes":[],"frontier":{"maxClock":1,"opCount":1,"publishedAt":1,"deviceId":"' + DEVICE + '"},"issuedAt":1,"expiresAt":2,"contacts":[]}',
+        '{"v":2,"grantId":"short","scopes":[],"frontier":{"maxClock":1,"opCount":1,"publishedAt":1,"deviceId":"' + DEVICE + '"},"issuedAt":1,"expiresAt":2,"contacts":[]}',
+        // R-31: an `ownerPubkey` a producer tries to smuggle back on is not
+        // fatal — it is simply not a field of this wire, so the parser drops
+        // it and the value never reaches a consumer.
+        '{"v":2,"grantId":"' + GRANT + '","ownerPubkey":"' + '1'.repeat(64) + '","scopes":[],"frontier":{"maxClock":1,"opCount":1,"publishedAt":1,"deviceId":"' + DEVICE + '"},"issuedAt":1,"expiresAt":2,"contacts":[]}',
         '[]',
       ],
     });

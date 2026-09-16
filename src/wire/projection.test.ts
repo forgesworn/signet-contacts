@@ -27,7 +27,7 @@ function contact(over: Partial<ProjectedContact> = {}): ProjectedContact {
 
 function projection(over: Partial<ContactProjectionV2> = {}): ContactProjectionV2 {
   return {
-    v: 2, grantId: GRANT, ownerPubkey: '1'.repeat(64),
+    v: 2, grantId: GRANT,
     scopes: ['signet.contacts.read:directory'],
     frontier: { maxClock: 7, opCount: 12, publishedAt: 1_700_000_000, deviceId: DEVICE },
     issuedAt: 1_700_000_000, expiresAt: 1_700_021_600,
@@ -129,10 +129,35 @@ describe('buildProjection / parseProjection', () => {
     expect(() => buildProjection(projection({ contacts: [contact({ roles: Array(20).fill('r') })] }))).toThrow();
   });
 
-  it('throws on a grant id, owner pubkey or expiry that is not well formed', () => {
+  it('throws on a grant id or expiry that is not well formed', () => {
     expect(() => buildProjection(projection({ grantId: 'short' }))).toThrow();
-    expect(() => buildProjection(projection({ ownerPubkey: 'nope' }))).toThrow();
     expect(() => buildProjection(projection({ expiresAt: 1_600_000_000 }))).toThrow();
+  });
+
+  // R-31: the directory owner's persona pubkey is NOT on this wire. It was
+  // stable across every grant on a directory, so two colluding apps could
+  // join on it in one line — the exact join `scopedContactId`'s opacity
+  // exists to frustrate — and for a dependant directory it was a minor's
+  // long-lived public identity handed to every paired app. The SDK never
+  // read it: nothing in `client.ts`, `state.ts` or `projection.ts` compared,
+  // checked or used it for anything.
+  it('does not carry an owner pubkey, and drops one a producer tries to smuggle in', () => {
+    const body = buildProjection(projection());
+    expect(body).not.toContain('ownerPubkey');
+
+    const smuggled = JSON.stringify({
+      ...(JSON.parse(body) as Record<string, unknown>),
+      ownerPubkey: '1'.repeat(64),
+    });
+    const parsed = parseProjection(smuggled);
+    expect(parsed).not.toBeNull();
+    expect('ownerPubkey' in (parsed as object)).toBe(false);
+  });
+
+  it('parses a projection that never had an owner pubkey at all', () => {
+    const body = JSON.parse(buildProjection(projection())) as Record<string, unknown>;
+    expect(body.ownerPubkey).toBeUndefined();
+    expect(parseProjection(JSON.stringify(body))?.grantId).toBe(GRANT);
   });
 
   it('throws when a scope would be silently narrowed in transit', () => {

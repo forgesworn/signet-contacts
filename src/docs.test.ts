@@ -6,6 +6,7 @@ const wire = readFileSync('docs/WIRE.md', 'utf8');
 const readme = readFileSync('README.md', 'utf8');
 const integration = readFileSync('docs/INTEGRATION.md', 'utf8');
 const security = readFileSync('SECURITY.md', 'utf8');
+const changelog = readFileSync('CHANGELOG.md', 'utf8');
 
 describe('docs/WIRE.md', () => {
   it('documents every capability token and its description', () => {
@@ -28,6 +29,24 @@ describe('docs/WIRE.md', () => {
   it('states the hard limits', () => {
     expect(wire).toContain(String(MAX_WIRE_BYTES));
     expect(wire).toContain(String(MAX_PROPOSALS_PER_BATCH));
+  });
+
+  // R-31: the owner's persona pubkey is not on this wire, and no document may
+  // describe it as if it were — a doc that still listed the field would send
+  // an independent implementer straight back into the join it was removed to
+  // prevent.
+  it('never documents an owner pubkey field on the projection body (R-31)', () => {
+    for (const doc of [readme, integration, security]) {
+      expect(doc).not.toContain('ownerPubkey');
+    }
+    // WIRE.md names it exactly once, in the paragraph that says it is gone.
+    expect(wire).toContain('no owner pubkey on this wire');
+    const vector = JSON.parse(readFileSync('vectors/projection.v2.json', 'utf8')) as {
+      regenerated: string; full: { plaintext: string; parsed: Record<string, unknown> };
+    };
+    expect(vector.regenerated).toContain('R-31');
+    expect(vector.full.plaintext).not.toContain('ownerPubkey');
+    expect('ownerPubkey' in vector.full.parsed).toBe(false);
   });
 
   it('points at the generated vectors', () => {
@@ -60,6 +79,14 @@ describe('README.md', () => {
     expect(readme).toMatch(/never un-block/i);
     expect(readme).toMatch(/cannot recall|already downloaded|already decrypted/i);
     expect(readme).toMatch(/close circle/i);
+  });
+});
+
+describe('CHANGELOG.md', () => {
+  it('records the one authorised projection-vector regeneration and its reason', () => {
+    expect(changelog).toContain('R-31');
+    expect(changelog).toContain('vectors/projection.v2.json');
+    expect(readme).toContain('CHANGELOG.md');
   });
 });
 

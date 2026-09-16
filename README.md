@@ -98,6 +98,9 @@ the grant was revoked: `client.getBlockedSet()` is sticky and ignores both.
 - [`docs/INTEGRATION.md`](docs/INTEGRATION.md) — a worked integration against a
   real consumer app.
 - [`SECURITY.md`](SECURITY.md) — the threat model this wire was built against.
+- [`CHANGELOG.md`](CHANGELOG.md) — dated wire changes, including which ones are
+  not backwards compatible. There are no published releases yet, so pin a
+  commit and read this before moving the pin.
 
 ## Licence
 

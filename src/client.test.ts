@@ -71,7 +71,7 @@ const PAIRING: PairingV2 = {
 
 function projection(over: Partial<ContactProjectionV2> = {}): ContactProjectionV2 {
   return {
-    v: 2, grantId: GRANT, ownerPubkey: '1'.repeat(64),
+    v: 2, grantId: GRANT,
     scopes: ['signet.contacts.read:directory'],
     frontier: { maxClock: 5, opCount: 10, publishedAt: 1_700_000_000, deviceId: '2'.repeat(32) },
     issuedAt: 1_700_000_000, expiresAt: 1_700_021_600,

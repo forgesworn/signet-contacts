@@ -10,7 +10,7 @@
     "./wire": { "types": "./dist/wire/index.d.ts", "default": "./dist/wire/index.js" },
     "./adapters/nostr-tools": { "types": "./dist/adapters/nostr-tools.d.ts", "default": "./dist/adapters/nostr-tools.js" }
   },
-  "files": ["dist", "vectors", "docs", "LICENSE", "README.md", "SECURITY.md"],
+  "files": ["dist", "vectors", "docs", "LICENSE", "README.md", "SECURITY.md", "CHANGELOG.md"],
   "scripts": {
     "build": "tsc",
     "test": "vitest run",

@@ -64,8 +64,18 @@ export interface ProjectedContact {
 export interface ProjectionFrontier {
   maxClock: number; opCount: number; publishedAt: number; deviceId: string;  // 32 hex
 }
+/**
+ * R-31: there is deliberately NO `ownerPubkey` on this wire. A connected app
+ * learns the grant's rail pubkey and a set of grant-scoped opaque contact ids,
+ * and nothing else about whose directory it is reading. The owner's persona
+ * pubkey would have been stable across every grant on a directory, so two
+ * colluding apps could have joined their projections on it in one line — the
+ * very link `scopedContactId` exists to break — and on a `dependant`
+ * directory it would have been a minor's long-lived public identity, handed
+ * to every paired app. Nothing in this SDK ever read it.
+ */
 export interface ContactProjectionV2 {
-  v: 2; grantId: string; ownerPubkey: string; scopes: Capability[];
+  v: 2; grantId: string; scopes: Capability[];
   frontier: ProjectionFrontier; issuedAt: number; expiresAt: number;
   contacts: ProjectedContact[]; revoked?: true;
   /** R-5: set when the producer dropped contacts to fit `MAX_WIRE_BYTES`. */
