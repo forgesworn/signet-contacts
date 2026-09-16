@@ -8,7 +8,9 @@
   "exports": {
     ".": { "types": "./dist/index.d.ts", "default": "./dist/index.js" },
     "./wire": { "types": "./dist/wire/index.d.ts", "default": "./dist/wire/index.js" },
-    "./adapters/nostr-tools": { "types": "./dist/adapters/nostr-tools.d.ts", "default": "./dist/adapters/nostr-tools.js" }
+    "./adapters/nostr-tools": { "types": "./dist/adapters/nostr-tools.d.ts", "default": "./dist/adapters/nostr-tools.js" },
+    "./vectors/*": "./vectors/*",
+    "./package.json": "./package.json"
   },
   "files": ["dist", "vectors", "docs", "LICENSE", "README.md", "SECURITY.md", "CHANGELOG.md"],
   "scripts": {
@@ -25,7 +27,7 @@
   "author": "forgesworn",
   "license": "MIT",
   "sideEffects": false,
-  "engines": { "node": ">=22" },
+  "engines": { "node": ">=18" },
   "dependencies": { "@noble/hashes": "^2.0.1" },
   "peerDependencies": { "nostr-tools": "^2.24.1" },
   "peerDependenciesMeta": { "nostr-tools": { "optional": true } },

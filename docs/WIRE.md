@@ -87,6 +87,26 @@ as `wss://` (or loopback `ws://`). Both are hard rejections, never
 truncations — a truncated relay URL is a different relay, and a truncated nonce
 is a weaker one.
 
+### Carriers — the same query string, three ways (M10)
+
+`buildPairingUri` emits the `signet-grant://pair?…` form, which is what a QR
+code should carry. Signet accepts the identical query string through two other
+carriers, and every parser here reads whatever follows the first `?`, so all
+three parse identically:
+
+| Carrier | Shape | When |
+|---|---|---|
+| Custom scheme | `signet-grant://pair?v=2&…` | a QR code, or any handoff where the phone already has Signet installed |
+| Web carrier | `https://<signet host>/?pair=1&v=2&…` | a same-device link, and the fallback when no app is installed |
+| Verified App Link | `https://mysignet.app/pair?v=2&…` | Android, where the OS opens the installed app directly with no chooser |
+
+Only the parameters after `?` are normative; `pair=1` on the web carrier is a
+routing marker for Signet's own dispatcher, not part of this wire, and the
+`mysignet.app` host is signet-app's deployment rather than something an
+implementation should hard-code. A consumer building a desktop-to-phone handoff
+wants the web carrier: take `buildPairingUri`'s output, keep the query string,
+and put it behind the https URL Signet publishes, with `pair=1` added.
+
 ### Ack delivery — several candidates, never one (I3)
 
 A consumer waiting for its ack asks for up to **`ACK_CANDIDATE_LIMIT` = 10**
@@ -156,7 +176,7 @@ default `21600` when absent or invalid) by `clampStaleness`.
 | `frontier.deviceId` | 32-hex | — |
 | `issuedAt` | non-negative integer | — |
 | `expiresAt` | integer ≥ `issuedAt` | — |
-| `contacts` | `ProjectedContact[]` | ≤ 2000 (`MAX_CONTACTS_PER_PROJECTION`) |
+| `contacts` | `ProjectedContact[]` | ≤ 2000 (`MAX_CONTACTS_PER_PROJECTION`); a parser that has to cut the list sets `truncated` itself |
 | `revoked` | `true` or absent | — |
 | `truncated` | `true` or absent | — |
 

@@ -7,7 +7,7 @@
  * without pulling nostr-tools in at all. `nostr-tools` stays an OPTIONAL peer
  * dependency of this package for exactly that reason.
  *
- * Fix round 1: `client.ts` only bounds its OWN polling loop
+ * Bounded calls. `client.ts` only bounds its OWN polling loop
  * (`awaitPairingAck`'s `timeoutMs`) — a single `pool.get`/`pool.publish` call
  * has no bound of its own, so a relay that simply never answers hangs
  * `fetchProjection` forever. Every pool call here is now raced against
@@ -87,7 +87,7 @@ function raceTimeout<T>(factory: () => Promise<T>, ms: number): Promise<T | type
   return new Promise((resolve) => {
     const timer = setTimeout(() => resolve(TIMEOUT), ms);
     try {
-      // Residuals fix: `Promise.resolve(...)`, not a bare `.then` on
+      // `Promise.resolve(...)`, not a bare `.then` on
       // whatever `factory()` returned. `factory`'s TYPE says `Promise<T>`,
       // but a `SimplePoolLike` is structurally typed precisely so a caller
       // can hand in anything satisfying the shape — including a pool whose

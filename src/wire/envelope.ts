@@ -1,7 +1,7 @@
 /**
  * Vault envelope v2 — SDK-side open/seal.
  *
- * FORMAT-MIRRORED, byte-for-byte, from signet-app's `src/lib/vault-envelope.ts`
+ * FORMAT-MIRRORED, byte-for-byte, from signet-app's vault envelope
  * (ruling R-4). The app publishes every private-state rail — including the
  * grant's rail-key projection this SDK consumes — as a v2 envelope rather than
  * a bare NIP-44 payload: nostr-tools' NIP-44 v2 implementation rejects
@@ -30,7 +30,7 @@
  * KEY MATERIAL. The raw content key and the padded body are `fill(0)`ed in a
  * `finally` on both legs, same acceptance the app documents: `b64(rawKey)`
  * still mints an immutable string holding the 256-bit key that cannot itself
- * be zeroized, but the `Uint8Array`s are wiped.
+ * be zeroised, but the `Uint8Array`s are wiped.
  */
 
 // `webcrypto.CryptoKey` (Node's Web Crypto types live inside `node:crypto`'s
@@ -182,7 +182,7 @@ const LOWERCASE_HEX_64 = /^[0-9a-f]{64}$/;
  * parameter is explicit rather than read off a connected backend, since the
  * SDK holds no notion of "our own pubkey" independent of the caller's signer.
  *
- * Residuals fix: `recipientPubkey` is checked as strict lowercase 64-hex
+ * `recipientPubkey` is checked as strict lowercase 64-hex
  * BEFORE anything else — matching the app's own guard (Task 23,
  * `vault-envelope.ts`'s `activePublicKeyHex` check). Wrapping a content key
  * to `''`, an npub, or mixed-case hex would either throw out of a publish

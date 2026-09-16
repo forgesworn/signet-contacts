@@ -186,6 +186,14 @@ describe('README.md and docs/INTEGRATION.md — live updates (R-32)', () => {
   });
 });
 
+describe('docs/WIRE.md — carriers (M10)', () => {
+  it('documents the web and App Link carriers, not only the custom scheme', () => {
+    expect(wire).toContain('signet-grant://pair?');
+    expect(wire).toContain('pair=1');
+    expect(wire).toMatch(/App Link/);
+  });
+});
+
 describe('CHANGELOG.md', () => {
   it('records the one authorised projection-vector regeneration and its reason', () => {
     expect(changelog).toContain('R-31');

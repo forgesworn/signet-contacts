@@ -61,3 +61,15 @@ as `wss://`-or-loopback; a challenge is exactly 32 hex characters
 (`CHALLENGE_HEX_CHARS`, replacing an open-ended `{16,}`); a pairing URI over
 `MAX_PAIRING_URI_CHARS` (2048) is refused before its query string is parsed.
 All three are hard parse failures, never silent truncations.
+
+**Smaller things in the same pass.** `parseProjection` now sets `truncated`
+itself when it has to cut an over-sent `contacts` list, so a consumer is never
+handed a short list it believes is complete. `package.json` exports
+`./vectors/*` (both repositories' parity tests read those files, and a bundler
+enforcing `exports` could not) and relaxes `engines.node` to `>=18`, which is
+what the platform globals this package uses actually require. Workstream
+bookkeeping — "Fix round 1", "Controller correction", bare review-item numbers,
+signet-app file paths — is out of the shipped source; the reasoning those
+comments carried stays. British spelling throughout ("zeroised"). WIRE.md now
+documents the web and Android App Link pairing carriers alongside the
+`signet-grant:` scheme.

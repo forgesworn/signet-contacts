@@ -156,15 +156,19 @@ export function parseProjection(json: string): ContactProjectionV2 | null {
   if (!isHex(frontier.deviceId, 32)) return null;
   if (!Array.isArray(o.contacts)) return null;
 
-  // M3: cap before filtering, same discipline as every other array on this wire.
+  // Cap before filtering, same discipline as every other array on this wire.
   const scopes = normaliseCapabilities(
     o.scopes.slice(0, MAX_CAPABILITIES).filter((c): c is Capability => isCapability(c)),
   );
-  // M5: a later duplicate `contactId` is dropped, keeping the first — two
+  // A later duplicate `contactId` is dropped, keeping the first — two
   // contacts sharing an id is malformed input, and silently keeping both
   // would let a hostile relay smuggle a second, different record under an
   // id the consumer already trusts.
   const seenContactIds = new Set<string>();
+  // M8: a cut the READER makes is as much a truncation as one the producer
+  // made. Without this a consumer handed an over-sent projection kept the
+  // first 2000 contacts and had nothing to tell it the list was short.
+  const parserCapped = o.contacts.length > MAX_CONTACTS_PER_PROJECTION;
   const contacts = o.contacts
     .slice(0, MAX_CONTACTS_PER_PROJECTION)
     .map(parseProjectedContact)
@@ -188,7 +192,7 @@ export function parseProjection(json: string): ContactProjectionV2 | null {
     contacts,
   };
   if (o.revoked === true) projection.revoked = true;
-  if (o.truncated === true) projection.truncated = true;
+  if (o.truncated === true || parserCapped) projection.truncated = true;
   return projection;
 }
 
@@ -246,7 +250,7 @@ function bodyOf(p: ContactProjectionV2, scopes: readonly Capability[], contacts:
  * own parser, then serialise AGAIN from the reparsed (canonical-order,
  * undefined-free, deduped, capped) values — see the module header.
  *
- * I1: the wire body is built from the REPARSED contacts, never the caller's
+ * The wire body is built from the REPARSED contacts, never the caller's
  * raw objects. Passing `projection.contacts` straight to `JSON.stringify`
  * would make the output depend on the caller's object-literal key insertion
  * order — two logically identical projections built from differently
@@ -265,7 +269,7 @@ export function buildProjection(projection: ContactProjectionV2): string {
   if (reparsed.contacts.length !== projection.contacts.length) {
     throw new TypeError('signet-contacts: projection would drop contacts in transit');
   }
-  // I2: compare against the JSON-round-tripped form of the caller's own
+  // Compare against the JSON-round-tripped form of the caller's own
   // contacts, not the caller's raw objects. `JSON.stringify` already drops
   // an explicitly-`undefined` optional field (e.g. a producer writing
   // `{ roles: hasRoles ? roles : undefined }`), and comparing the reparsed
@@ -297,7 +301,7 @@ export function buildProjection(projection: ContactProjectionV2): string {
 
   const json = JSON.stringify(bodyOf(reparsed, reparsed.scopes, reparsed.contacts));
   // R-5: fail closed on an over-cap body. The producer is expected to have
-  // fitted it already (signet-app's `buildContactProjection`); reaching here
+  // fitted it already (signet-app's own projection builder); reaching here
   // means it did not, and sealing would throw somewhere nobody is looking.
   const bytes = new TextEncoder().encode(json).length;
   if (bytes > MAX_WIRE_BYTES) {

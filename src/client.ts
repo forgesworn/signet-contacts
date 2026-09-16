@@ -73,7 +73,7 @@ export interface SignetContactsClient {
   parsePairingUri(input: string, opts?: { nowSec?: number; freshnessSeconds?: number }): PairingRequestV2Result;
   awaitPairingAck(opts: {
     challenge: string; relays: string[]; timeoutMs?: number; pollMs?: number;
-    /** Controller correction 1: the app's OWN request, so a producer cannot
+    /** The app's OWN request, so a producer cannot
      *  grant a capability nobody asked for. Omitted only by a caller that
      *  chose not to enforce narrowing itself. */
     requestedCapabilities?: readonly Capability[];
@@ -147,7 +147,7 @@ function sleep(ms: number): Promise<void> {
 }
 
 /**
- * Fix round 1, I2: a stored pending row is trusted no further than a wire
+ * A stored pending row is trusted no further than a wire
  * value would be — `operationId` is checked as the 32-hex id it always is
  * (`randomHex(16)`), and `value`'s shape is checked against the SAME two
  * value types the wire itself allows, per `action`.
@@ -172,7 +172,7 @@ function isValidPendingProposal(candidate: unknown): candidate is PendingProposa
 export function createSignetContactsClient(opts: {
   signer: ContactsSigner; relay: RelayIo; storage?: StorageIo; now?: () => number;
   maxPendingStalenessSeconds?: number;
-  /** Controller correction 3: the clock a `rename-app-label` draft with no
+  /** The clock a `rename-app-label` draft with no
    *  `updatedAt` is stamped from. Defaults to `Date.now` (ms epoch, matching
    *  `RenameAppLabelValue.updatedAt`'s documented unit) — inject it in a test
    *  so the LWW field is deterministic rather than depending on wall time. */
@@ -200,7 +200,7 @@ export function createSignetContactsClient(opts: {
   }
 
   /**
-   * Controller correction M1: keyed off the CALLER's `grantId` (known the
+   * Keyed off the CALLER's `grantId` (known the
    * moment a pairing exists), never `state.grantId` — which stays null until
    * the first successful `fetchProjection`. A proposal sent before that first
    * fetch is exactly the "asked, not answered yet" case R-9 exists for, and it
@@ -296,7 +296,7 @@ export function createSignetContactsClient(opts: {
         // signer round-trip, which post-migration is an ESP32 away.
         if (event.content.length > MAX_ENVELOPE_CHARS) return null;
 
-        // Fix round 1, C2 (ruling R-4): the app publishes every private-state
+        // R-4: the app publishes every private-state
         // rail — this grant's projection included — as a v2 VAULT ENVELOPE
         // (`{v:2,k,iv,ct,b}`: a random AES-256-GCM content key, itself
         // NIP-44-wrapped), never a bare NIP-44 payload. A bare
@@ -308,14 +308,14 @@ export function createSignetContactsClient(opts: {
         const projection = parseProjection(plaintext);
         if (!projection || projection.grantId !== pairing.grantId) return null;
 
-        // Fix round 1, M3: the grant's own `grantedCapabilities` is a ceiling
+        // The grant's own `grantedCapabilities` is a ceiling
         // on what this projection may claim to carry — a producer (or a
         // relay replaying an old event from before a narrowing) cannot hand
         // out MORE scopes than the app was actually granted.
         const grantedSet = new Set(pairing.grantedCapabilities);
         if (projection.scopes.some((sc) => !grantedSet.has(sc))) return null;
 
-        // Controller correction 2: the grant's own clamped ceiling on how
+        // The grant's own clamped ceiling on how
         // stale a projection may be, enforced independently of whatever the
         // projection itself claims — a producer (or a relay replaying an old
         // event) cannot hand out a wider staleness window than the owner
@@ -324,7 +324,7 @@ export function createSignetContactsClient(opts: {
 
         const nowSec = now();
         const next = applyProjection(state, projection, nowSec);
-        // Fix round 1, I1: `next === state` means the frontier rule REJECTED
+        // `next === state` means the frontier rule REJECTED
         // this projection (an older or duplicate replay) — the caller must
         // not be handed a projection that was never actually applied.
         if (next === state) return null;
@@ -374,7 +374,7 @@ export function createSignetContactsClient(opts: {
             // Bounded, like the projection path: an oversized `content` is
             // refused before it can buy a signer round-trip.
             if (event.content.length > MAX_ENVELOPE_CHARS) continue;
-            // Controller correction 1: the ack payload carries no timestamp of
+            // The ack payload carries no timestamp of
             // its own, so freshness is judged on the carrier EVENT's
             // `created_at` — an old ack replayed by a relay must not resurrect
             // a pairing the app has long since given up polling for.
@@ -386,13 +386,13 @@ export function createSignetContactsClient(opts: {
               const plaintext = await signer.nip44Decrypt(event.pubkey, event.content);
               const ack = parsePairingAckV2(plaintext, challenge);
               if (!ack) continue;
-              // Controller correction 1: narrowing only. A producer that
+              // Narrowing only. A producer that
               // grants a capability the app never requested is either a bug
               // or an attempt to smuggle scope past the app's own consent
               // screen — either way this is not a valid ack for this request.
               const overGranted = allowed !== null
                 && ack.grantedCapabilities.some((c) => !allowed.has(c));
-              // Fix round 1, M4: a rail that is the app's OWN pubkey is
+              // A rail that is the app's OWN pubkey is
               // nonsensical for this wire (the app cannot be its own
               // signing rail) and would make the projection's later
               // author-pin check trivially satisfiable by anything the
@@ -483,7 +483,7 @@ export function createSignetContactsClient(opts: {
       let plaintext: string;
       let proposals: ContactProposalV1[];
       try {
-        // Controller correction 3: a rename draft with no `updatedAt` is
+        // A rename draft with no `updatedAt` is
         // stamped from the client's OWN injected clock, not `draftToProposal`'s
         // internal `Date.now()` fallback — so a caller that injected `nowMs`
         // for determinism gets a deterministic LWW field, not real wall time.
@@ -497,7 +497,7 @@ export function createSignetContactsClient(opts: {
       } catch {
         return false;
       }
-      // Fix round 1, I3: none of the encrypt/sign/publish leg is allowed to
+      // None of the encrypt/sign/publish leg is allowed to
       // throw out of `propose` — a signer or relay that rejects (a bunker
       // round-trip failing, a relay socket dropping) is exactly the same
       // "did not send" outcome as `publish` returning `false`.
@@ -519,14 +519,14 @@ export function createSignetContactsClient(opts: {
             value: proposal.value, sentAt: createdAt,
           });
         }
-        // Fix round 1, M1: keyed off `pairing.grantId`, not `state.grantId` —
+        // Keyed off `pairing.grantId`, not `state.grantId` —
         // see `persistPending`'s own note.
         await persistPending(pairing.grantId);
       }
       return ok;
     },
 
-    // Fix round 1, M2: a deep copy. `pendingProposals()` is documented
+    // A deep copy. `pendingProposals()` is documented
     // read-only; a shallow `[...pending]` still hands out the SAME `value`
     // object each entry wraps, so a caller mutating `pending[0].value.label`
     // (say) would corrupt this client's own internal state.
@@ -544,7 +544,7 @@ export function createSignetContactsClient(opts: {
         const rawPending = await storage.get(`${PENDING_KEY_PREFIX}${grantId}`);
         if (rawPending) {
           const parsed = JSON.parse(rawPending) as unknown;
-          // Fix round 1, I2: a per-row shape check, not just "has the two
+          // A per-row shape check, not just "has the two
           // fields every row happens to share" — a row this client wrote is
           // always well-formed, but the STORE is outside this client's
           // control (shared with the rest of the app, editable by devtools,
@@ -563,7 +563,7 @@ export function createSignetContactsClient(opts: {
         if (raw) {
           const parsed = JSON.parse(raw) as Partial<ContactsState>;
           if (typeof parsed === 'object' && parsed !== null && Array.isArray(parsed.blockedPubkeys)) {
-            // Fix round 1, I2: re-validate the stored projection through the
+            // Re-validate the stored projection through the
             // same guards a fresh wire projection gets, rather than trusting
             // whatever JSON happens to be sitting in the store. `state.
             // projection` feeds `applyProjection`'s frontier comparison on
@@ -576,7 +576,7 @@ export function createSignetContactsClient(opts: {
             const rawProjection = parsed.projection === null || parsed.projection === undefined
               ? null
               : parseProjection(JSON.stringify(parsed.projection));
-            // Residuals fix: pinned to the ARGUMENT `grantId`, never
+            // Pinned to the ARGUMENT `grantId`, never
             // `parsed.grantId` — a stored row addressing a different grant
             // (stale key reuse, a corrupted write, a future key-scheme bug)
             // must not resurrect a projection under the wrong grant. Every

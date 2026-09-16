@@ -22,8 +22,8 @@ const SCOPED_PREFIX = 'signet:contacts:cid:';
 const TAG_HEX_CHARS = 32;
 
 /**
- * R-6: byte-identical to signet-app's `sanitizeDisplayName` class
- * (`src/lib/text-sanitize.ts`), written with ESCAPES rather than the literal
+ * R-6: byte-identical to signet-app's own `sanitizeDisplayName` character
+ * class, written with ESCAPES rather than the literal
  * invisible characters — the literal spelling cannot be reviewed by reading
  * and does not survive a copy-paste, and this class is the one thing that has
  * to agree across two repositories. Strip, trim, slice, in that order.
@@ -95,9 +95,9 @@ export function randomHex(bytes: number): string {
  *  builder imports THIS function rather than using its own
  *  `sanitizeDisplayName`, so a producer can never emit a string its own parser
  *  would rewrite — which would make `buildProjection` throw on every rebuild
- *  and kill that grant's rail permanently and silently. (signet-app's OWN
- *  display sanitiser still slices by UTF-16 unit — a separate, pre-existing
- *  gap in that repo, not fixed here.) */
+ *  and kill that grant's rail permanently and silently. (signet-app's own display-layer
+ *  sanitiser still slices by UTF-16 unit — a separate, pre-existing gap in
+ *  that repo, not fixed here.) */
 export function sanitizeWireText(raw: unknown, maxLen: number): string {
   if (typeof raw !== 'string') return '';
   const stripped = raw.replace(CONTROL_BIDI, '').trim();

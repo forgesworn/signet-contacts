@@ -4,8 +4,8 @@ import {
 } from './projection.js';
 import { projectionTag } from './ids.js';
 import {
-  MAX_CAPABILITIES, MAX_IDENTITIES_PER_CONTACT, MAX_LINKED_PUBKEYS,
-  MAX_METHODS_PER_CONTACT, MAX_WIRE_BYTES, PROJECTION_KIND,
+  MAX_CAPABILITIES, MAX_CONTACTS_PER_PROJECTION, MAX_IDENTITIES_PER_CONTACT,
+  MAX_LINKED_PUBKEYS, MAX_METHODS_PER_CONTACT, MAX_WIRE_BYTES, PROJECTION_KIND,
 } from './constants.js';
 import type { ContactProjectionV2, ProjectedContact } from './types.js';
 
@@ -141,6 +141,28 @@ describe('buildProjection / parseProjection', () => {
   // long-lived public identity handed to every paired app. The SDK never
   // read it: nothing in `client.ts`, `state.ts` or `projection.ts` compared,
   // checked or used it for anything.
+  // M8: the parser's own cap used to be silent, so a consumer handed a
+  // 2500-contact projection kept 2000 of them and believed the list complete —
+  // `truncated` was producer-set only. A cut the READER makes is exactly as
+  // much a truncation as one the producer made.
+  it('sets truncated when it caps the contacts list itself', () => {
+    const many = Array.from({ length: MAX_CONTACTS_PER_PROJECTION + 3 }, (_, i) => contact({
+      contactId: i.toString(16).padStart(32, '0'),
+    }));
+    const overSent = JSON.stringify({
+      v: 2, grantId: GRANT, scopes: ['signet.contacts.read:directory'],
+      frontier: { maxClock: 1, opCount: 1, publishedAt: 1, deviceId: DEVICE },
+      issuedAt: 1, expiresAt: 2, contacts: many,
+    });
+    const parsed = parseProjection(overSent);
+    expect(parsed?.contacts).toHaveLength(MAX_CONTACTS_PER_PROJECTION);
+    expect(parsed?.truncated).toBe(true);
+  });
+
+  it('leaves truncated unset when nothing was cut', () => {
+    expect(parseProjection(buildProjection(projection()))?.truncated).toBeUndefined();
+  });
+
   it('does not carry an owner pubkey, and drops one a producer tries to smuggle in', () => {
     const body = buildProjection(projection());
     expect(body).not.toContain('ownerPubkey');

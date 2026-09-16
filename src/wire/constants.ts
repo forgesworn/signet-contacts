@@ -32,7 +32,7 @@ export const PAIRING_FRESHNESS_SECONDS = 300;
 export const ACK_CANDIDATE_LIMIT = 10;
 
 /**
- * R-12: there is no `signet.contacts.read:avatar` in v2. A capability that
+ * There is no `signet.contacts.read:avatar` in v2 (R-12). A capability that
  * grants a field the producer cannot fill is a promise the wire does not keep,
  * so it waits until signet-app has an avatar map to project. `ProjectedAvatar`
  * and its parser stay, so adding the capability later is additive.
@@ -73,9 +73,9 @@ export function normaliseCapabilities(input: readonly Capability[]): Capability[
  * own documentation. C10: this is NOT the copy a person approves against —
  * that lives in signet-app's `contacts-v2-copy.ts`, inside the repo's
  * vocabulary guard, where every other word the owner reads lives. Shipping
- * user-facing copy from `node_modules` would put it outside both the
- * forbidden-vocabulary scan and the no-console scan, and the words a consumer's
- * README promises are not automatically the words the owner should be shown.
+ * user-facing copy from `node_modules` would put it outside that repository's
+ * own vocabulary guard, and the words a consumer's README promises are not
+ * automatically the words the owner should be shown.
  */
 export const CAPABILITY_DESCRIPTIONS: Record<Capability, string> = {
   'signet.contacts.read:directory':
@@ -96,7 +96,7 @@ export const CAPABILITY_DESCRIPTIONS: Record<Capability, string> = {
     'Propose a rename that applies only inside this grant’s own projection.',
 };
 
-export const DEFAULT_STALENESS_SECONDS = 21600;  // 6 h — exploration §5.1 example grant
+export const DEFAULT_STALENESS_SECONDS = 21600;  // 6 h
 export const MIN_STALENESS_SECONDS = 3600;       // 1 h
 export const MAX_STALENESS_SECONDS = 604800;     // 7 d
 
@@ -104,15 +104,15 @@ export const MAX_STALENESS_SECONDS = 604800;     // 7 d
  * Hard plaintext ceiling for anything this wire seals (R-5).
  *
  * Two limits meet here and the tighter one wins: nostr-tools' NIP-44 v2
- * implementation rejects plaintext over 65535 bytes (exploration §7 review
- * note), and signet-app's vault envelope pads into buckets topping out at
+ * implementation rejects plaintext over 65535 bytes, and signet-app's vault
+ * envelope pads into buckets topping out at
  * `TOP_BUCKET` = 65536 with a 4-byte length prefix — so 65532 bytes is the
  * most a projection body can be and still seal.
  *
  * This is ENFORCED, not documented: `buildProjection` throws above it, and the
- * producer fits the body first (`projectionByteLength`, and signet-app's
- * `buildContactProjection`, which drops the least recently updated contacts
- * and sets `truncated: true`). A projection that cannot fit fails loudly at
+ * producer fits the body first (`projectionByteLength`, and signet-app's own
+ * projection builder, which keeps the most recently updated contacts, drops
+ * the rest and sets `truncated: true`). A projection that cannot fit fails loudly at
  * build time rather than failing to encrypt in a catch nobody reads.
  */
 export const MAX_WIRE_BYTES = 65532;
