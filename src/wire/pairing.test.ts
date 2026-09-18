@@ -234,3 +234,13 @@ describe('isValidContactsRelayUrl', () => {
     expect(isValidContactsRelayUrl('https://relay.example.com')).toBe(false);
   });
 });
+
+
+it('drops legacy broad method access instead of converting it into new grants', () => {
+  const uri = buildPairingUriV2({ ...BASE, capabilities: ['signet.contacts.read:directory', 'signet.contacts.read:method:email'] });
+  const old = uri.replace('read%3Amethod%3Aemail', 'read%3Amethods');
+  expect(parsePairingRequestV2(old, { nowSec: NOW }).request?.capabilities)
+    .toEqual(['signet.contacts.read:directory']);
+  expect(parsePairingRequestV2(uri, { nowSec: NOW }).request?.capabilities)
+    .toEqual(['signet.contacts.read:directory', 'signet.contacts.read:method:email']);
+});

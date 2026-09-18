@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- Replace broad contact-method access with separate phone, email, website,
+  postal-address and other-method capabilities; legacy broad grants do not expand.
+- Default directory access contains names and public keys only. Tiers and
+  verification status need their own capabilities; omitted fields stay unknown.
+- Retain parsing of legacy full snapshots while supporting minimal projections.
+
+
 This package has no published releases yet; consumers install it pinned to a
 commit. Entries are therefore dated rather than versioned, and a wire change
 that is not backwards compatible says so in its own words.

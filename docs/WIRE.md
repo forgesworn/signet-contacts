@@ -185,20 +185,20 @@ default `21600` when absent or invalid) by `clampStaleness`.
 | Field | Type | Limit |
 |---|---|---|
 | `contactId` | 32-hex, grant-scoped opaque id | — |
-| `type` | `'person' \| 'organisation'` | — |
+| `type` (legacy, optional) | `'person' \| 'organisation'` | — |
 | `identities[].pubkey` | 64-hex | ≤ 16 per contact (`MAX_IDENTITIES_PER_CONTACT`) |
-| `identities[].verification` | `'unverified' \| 'proven' \| 'mutual'` | — |
+| `identities[].verification` (optional) | `'unverified' \| 'proven' \| 'mutual'` | — |
 | `displayName` | sanitised string | ≤ 100 chars (`MAX_DISPLAY_NAME`) |
 | `avatar.url` | `https://` only | ≤ 512 chars (`MAX_URL_LEN`) |
 | `avatar.hash` | 64-hex | — |
-| `effectiveTier` | `'kin' \| 'kith' \| 'ken' \| 'none'` | — |
-| `tierSource` | `'direct' \| 'guardian-vouched' \| 'guardian-limited'` | — |
+| `effectiveTier` (optional) | `'kin' \| 'kith' \| 'ken' \| 'none'` | — |
+| `tierSource` (optional) | `'direct' \| 'guardian-vouched' \| 'guardian-limited'` | — |
 | `roles` | `string[]`, sanitised | ≤ 8 items (`MAX_ROLES_PER_CONTACT`), ≤ 40 chars each (`MAX_ROLE_LEN`) |
 | `contactMethods[].kind` | `'phone' \| 'email' \| 'website' \| 'postal-address' \| 'other'` | ≤ 16 per contact (`MAX_METHODS_PER_CONTACT`) |
 | `contactMethods[].value` | sanitised string | ≤ 320 chars (`MAX_METHOD_VALUE`) |
-| `contactMethods[].verification` | `'unverified' \| 'proven'` | — |
-| `blocked` | boolean | — |
-| `linkedPubkeys` | `string[]` of 64-hex | ≤ 16 items (`MAX_LINKED_PUBKEYS`) |
+| `contactMethods[].verification` (optional) | `'unverified' \| 'proven'` | — |
+| `blocked` (optional) | boolean | — |
+| `linkedPubkeys` (legacy, optional) | `string[]` of 64-hex | ≤ 16 items (`MAX_LINKED_PUBKEYS`) |
 
 There is **no owner pubkey on this wire** (R-31). A connected app learns the
 grant's rail pubkey and a set of grant-scoped opaque contact ids, and nothing
@@ -262,12 +262,32 @@ producer-side id.
 
 | Token | Description | Fields it unlocks |
 |---|---|---|
-| `signet.contacts.read:directory` | Read the directory: contact ids, type, display name, tier, tier source, identity pubkeys and linked pubkeys. | `contactId`, `type`, `displayName`, `effectiveTier`, `tierSource`, `identities`, `linkedPubkeys` |
-| `signet.contacts.read:methods` | Read contact methods whose sharingPolicy is grantable (phone, email, website, postal address). | `contactMethods` |
+| `signet.contacts.read:directory` | Read contact ids, display names and identity pubkeys only. | `contactId`, `displayName`, `identities[].pubkey` |
+| `signet.contacts.read:method:phone` | Read shareable phone contact methods. | Phone `contactMethods` only |
+| `signet.contacts.read:method:email` | Read shareable email contact methods. | Email `contactMethods` only |
+| `signet.contacts.read:method:website` | Read shareable website contact methods. | Website `contactMethods` only |
+| `signet.contacts.read:method:postal-address` | Read shareable postal-address contact methods. | Postal-address `contactMethods` only |
+| `signet.contacts.read:method:other` | Read shareable other contact methods. | Other `contactMethods` only |
+| `signet.contacts.read:tier` | Read Kin, Kith or Ken labels and whether a guardian set or limited them. | `effectiveTier`, `tierSource` |
+| `signet.contacts.read:checks` | Read verification status on the keys and contact methods already granted. | `identities[].verification`, `contactMethods[].verification` |
 | `signet.contacts.read:roles` | Read the owner-assigned role labels on each contact. | `roles` |
-| `signet.contacts.blocks.read` | Read blocked contacts, including their identity and linked pubkeys, so the app can filter them. | `blocked`, plus `identities`/`linkedPubkeys` on a blocked contact (S9 — identity keys come with it) |
-| `signet.contacts.propose:add-ken` | Add contacts to your Ken list (recognised only, no access). | unlocks `client.propose` with an `add-ken` draft |
-| `signet.contacts.propose:rename-app-label` | Propose a rename that applies only inside this grant’s own projection. | unlocks `client.propose` with a `rename-app-label` draft |
+| `signet.contacts.blocks.read` | Read blocked contacts, including their identity pubkeys, so the app can filter them. | `blocked`, `identities[].pubkey` |
+| `signet.contacts.propose:add-ken` | Add contacts to your Ken list (recognised only, no access). | `add-ken` proposals |
+| `signet.contacts.propose:rename-app-label` | Propose a rename that applies only inside this grant’s own projection. | `rename-app-label` proposals |
+
+Only `read:directory` is preselected on the grant screen. All other requested
+capabilities require explicit consent. Method, role, tier and check permissions
+also require `read:directory`; checks never grant a method value on their own.
+Notes, private evidence and private identity links are never projected.
+
+**Pre-release upgrade:** `read:methods` is retired, not expanded into the new
+method capabilities. Unknown tokens are dropped; reconnect with explicit method
+requests to restore access. Existing directory grants receive less data: tiers,
+checks and block state are optional and require their named capabilities.
+`type` and `linkedPubkeys` remain readable for legacy snapshots but are no longer
+emitted by My Signet. Old SDKs requiring tier/check fields may reject the smaller
+snapshot; update the SDK before reconnecting. This is a change before the first
+SDK release, not a compatibility promise for published consumers.
 
 `propose:add-ken` is named for the channel it uses, not for a review step:
 signet-app applies a valid `add-ken` as soon as the batch validates, so the app
@@ -277,9 +297,7 @@ app-authored contact can reach and drops app-created records first when a
 projection has to be truncated, so app volume cannot evict the owner's real
 contacts. Do not describe this capability to a person as "ask you to add".
 
-`linkedPubkeys` is carried on every projected contact the producer emits,
-including one projected at blocks-only scope, which is why `read:directory`
-names it as well as `blocks.read`.
+Private links are not included, even in a blocks-only projection.
 
 There is deliberately no *read-avatar* capability in v2 (ruling R-12): a
 capability that grants a field the producer cannot yet fill is a promise the

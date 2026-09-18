@@ -338,3 +338,20 @@ describe('projectionEventTemplate and projectionFilter', () => {
     });
   });
 });
+
+
+it('round-trips name and public key without inventing a tier, block state or checks', () => {
+  const minimal = { contactId: 'a'.repeat(32), displayName: 'Ada', identities: [{ pubkey: 'b'.repeat(64) }] };
+  const read = parseProjection(buildProjection(projection({ contacts: [minimal] })))!;
+  expect(read.contacts).toEqual([minimal]);
+  expect(read.contacts[0]?.effectiveTier).toBeUndefined();
+  expect(read.contacts[0]?.blocked).toBeUndefined();
+  expect(read.contacts[0]?.identities?.[0]?.verification).toBeUndefined();
+});
+
+it('round-trips a method value without requiring a verification disclosure', () => {
+  const minimal = { contactId: 'a'.repeat(32), contactMethods: [{ kind: 'email' as const, value: 'ada@example.com' }] };
+  expect(parseProjection(buildProjection(projection({
+    scopes: ['signet.contacts.read:directory', 'signet.contacts.read:method:email'], contacts: [minimal],
+  })))?.contacts).toEqual([minimal]);
+});

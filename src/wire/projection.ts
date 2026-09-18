@@ -51,8 +51,8 @@ function parseIdentity(raw: unknown): ProjectedIdentity | null {
   const o = raw as Record<string, unknown>;
   if (!isHex(o.pubkey, 64)) return null;
   const verification = o.verification;
-  if (typeof verification !== 'string' || !VERIFICATIONS.includes(verification as ProjectedVerification)) return null;
-  return { pubkey: o.pubkey, verification: verification as ProjectedVerification };
+  if (verification !== undefined && (typeof verification !== 'string' || !VERIFICATIONS.includes(verification as ProjectedVerification))) return null;
+  return { pubkey: o.pubkey, ...(verification !== undefined ? { verification: verification as ProjectedVerification } : {}) };
 }
 
 function parseMethod(raw: unknown): ProjectedMethod | null {
@@ -62,8 +62,8 @@ function parseMethod(raw: unknown): ProjectedMethod | null {
   if (typeof kind !== 'string' || !METHOD_KINDS.includes(kind as ProjectedMethodKind)) return null;
   const value = sanitizeWireText(o.value, MAX_METHOD_VALUE);
   if (value.length === 0) return null;
-  if (o.verification !== 'unverified' && o.verification !== 'proven') return null;
-  return { kind: kind as ProjectedMethodKind, value, verification: o.verification };
+  if (o.verification !== undefined && o.verification !== 'unverified' && o.verification !== 'proven') return null;
+  return { kind: kind as ProjectedMethodKind, value, ...(o.verification !== undefined ? { verification: o.verification } : {}) };
 }
 
 function parseAvatar(raw: unknown): ProjectedAvatar | undefined {
@@ -82,17 +82,17 @@ export function parseProjectedContact(raw: unknown): ProjectedContact | null {
   if (typeof raw !== 'object' || raw === null) return null;
   const o = raw as Record<string, unknown>;
   if (!isHex(o.contactId, 32)) return null;
-  if (typeof o.type !== 'string' || !TYPES.includes(o.type as ProjectedType)) return null;
-  if (typeof o.effectiveTier !== 'string' || !TIERS.includes(o.effectiveTier as ProjectedTier)) return null;
-  if (typeof o.tierSource !== 'string' || !TIER_SOURCES.includes(o.tierSource as ProjectedTierSource)) return null;
-  if (typeof o.blocked !== 'boolean') return null;
+  if (o.type !== undefined && (typeof o.type !== 'string' || !TYPES.includes(o.type as ProjectedType))) return null;
+  if (o.effectiveTier !== undefined && (typeof o.effectiveTier !== 'string' || !TIERS.includes(o.effectiveTier as ProjectedTier))) return null;
+  if (o.tierSource !== undefined && (typeof o.tierSource !== 'string' || !TIER_SOURCES.includes(o.tierSource as ProjectedTierSource))) return null;
+  if (o.blocked !== undefined && typeof o.blocked !== 'boolean') return null;
 
   const contact: ProjectedContact = {
     contactId: o.contactId,
-    type: o.type as ProjectedType,
-    effectiveTier: o.effectiveTier as ProjectedTier,
-    tierSource: o.tierSource as ProjectedTierSource,
-    blocked: o.blocked,
+    ...(o.type !== undefined ? { type: o.type as ProjectedType } : {}),
+    ...(o.effectiveTier !== undefined ? { effectiveTier: o.effectiveTier as ProjectedTier } : {}),
+    ...(o.tierSource !== undefined ? { tierSource: o.tierSource as ProjectedTierSource } : {}),
+    ...(typeof o.blocked === 'boolean' ? { blocked: o.blocked } : {}),
   };
 
   if (Array.isArray(o.identities)) {

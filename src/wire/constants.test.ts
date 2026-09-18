@@ -9,8 +9,7 @@ import {
 // not what a reviewer might wish it did. `propose:add-ken` is auto-applied by
 // signet-app the moment the batch validates — there is no queue, no prompt and
 // no owner decision — so describing it as a request the owner answers made the
-// approval screen's consent false. A1(M1): `linkedPubkeys` rides every
-// projected contact, so `read:directory` names it too.
+// approval screen's consent false.
 describe('capability descriptions say what happens (R-28d)', () => {
   it('describes add-ken as adding contacts, never as asking', () => {
     const addKen = CAPABILITY_DESCRIPTIONS['signet.contacts.propose:add-ken'];
@@ -19,17 +18,23 @@ describe('capability descriptions say what happens (R-28d)', () => {
     expect(addKen).not.toMatch(/may accept|approve|propose/i);
   });
 
-  it('names linked keys wherever they are actually carried', () => {
-    expect(CAPABILITY_DESCRIPTIONS['signet.contacts.read:directory']).toMatch(/linked/i);
-    expect(CAPABILITY_DESCRIPTIONS['signet.contacts.blocks.read']).toMatch(/linked/i);
+  it('describes the minimal default and does not promise private links', () => {
+    expect(CAPABILITY_DESCRIPTIONS['signet.contacts.read:directory']).toMatch(/names.*pubkeys only/i);
+    expect(CAPABILITY_DESCRIPTIONS['signet.contacts.blocks.read']).not.toMatch(/linked/i);
   });
 });
 
 describe('capability list', () => {
-  it('is the six v2 capabilities, in a frozen order', () => {
+  it('lists field-level capabilities in their consent order', () => {
     expect(CAPABILITIES).toEqual([
       'signet.contacts.read:directory',
-      'signet.contacts.read:methods',
+      'signet.contacts.read:method:phone',
+      'signet.contacts.read:method:email',
+      'signet.contacts.read:method:website',
+      'signet.contacts.read:method:postal-address',
+      'signet.contacts.read:method:other',
+      'signet.contacts.read:tier',
+      'signet.contacts.read:checks',
       'signet.contacts.read:roles',
       'signet.contacts.blocks.read',
       'signet.contacts.propose:add-ken',
@@ -52,6 +57,7 @@ describe('capability list', () => {
   it('recognises only known capability tokens', () => {
     expect(isCapability('signet.contacts.read:directory')).toBe(true);
     expect(isCapability('signet.contacts.read:everything')).toBe(false);
+    expect(isCapability('signet.contacts.read:methods')).toBe(false);
     expect(isCapability(42)).toBe(false);
   });
 });

@@ -43,20 +43,24 @@ export interface PairingAckV2 {
 /** Consumer-side persisted pairing. `pairedAt` is local metadata, never wire. */
 export interface PairingV2 extends Omit<PairingAckV2, 'v' | 'challenge'> { pairedAt: number }
 
-export interface ProjectedIdentity { pubkey: string; verification: ProjectedVerification }
-export interface ProjectedMethod { kind: ProjectedMethodKind; value: string; verification: 'unverified' | 'proven' }
+export interface ProjectedIdentity { pubkey: string; verification?: ProjectedVerification }
+export interface ProjectedMethod { kind: ProjectedMethodKind; value: string; verification?: 'unverified' | 'proven' }
 export interface ProjectedAvatar { url: string; hash: string; key?: string }
 export interface ProjectedContact {
   contactId: string;                 // grant-scoped opaque, 32 lowercase hex
-  type: ProjectedType;
+  /** Legacy optional metadata; current producers omit it. */
+  type?: ProjectedType;
   identities?: ProjectedIdentity[];
   displayName?: string;
   avatar?: ProjectedAvatar;
-  effectiveTier: ProjectedTier;
-  tierSource: ProjectedTierSource;
+  /** Present only with read:tier. Absence is not Ken. */
+  effectiveTier?: ProjectedTier;
+  tierSource?: ProjectedTierSource;
   roles?: string[];
   contactMethods?: ProjectedMethod[];
-  blocked: boolean;
+  /** Present only with blocks.read. Absence says nothing about block state. */
+  blocked?: boolean;
+  /** Legacy read compatibility only; current producers never disclose links. */
   linkedPubkeys?: string[];
 }
 /** C13: a projection is a SNAPSHOT, so the frontier says who published it and

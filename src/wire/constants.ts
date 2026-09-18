@@ -39,7 +39,13 @@ export const ACK_CANDIDATE_LIMIT = 10;
  */
 export type Capability =
   | 'signet.contacts.read:directory'
-  | 'signet.contacts.read:methods'
+  | 'signet.contacts.read:method:phone'
+  | 'signet.contacts.read:method:email'
+  | 'signet.contacts.read:method:website'
+  | 'signet.contacts.read:method:postal-address'
+  | 'signet.contacts.read:method:other'
+  | 'signet.contacts.read:tier'
+  | 'signet.contacts.read:checks'
   | 'signet.contacts.read:roles'
   | 'signet.contacts.blocks.read'
   | 'signet.contacts.propose:add-ken'
@@ -49,7 +55,13 @@ export type Capability =
  *  order `scopes` is normalised to before hashing. */
 export const CAPABILITIES = [
   'signet.contacts.read:directory',
-  'signet.contacts.read:methods',
+  'signet.contacts.read:method:phone',
+  'signet.contacts.read:method:email',
+  'signet.contacts.read:method:website',
+  'signet.contacts.read:method:postal-address',
+  'signet.contacts.read:method:other',
+  'signet.contacts.read:tier',
+  'signet.contacts.read:checks',
   'signet.contacts.read:roles',
   'signet.contacts.blocks.read',
   'signet.contacts.propose:add-ken',
@@ -79,13 +91,25 @@ export function normaliseCapabilities(input: readonly Capability[]): Capability[
  */
 export const CAPABILITY_DESCRIPTIONS: Record<Capability, string> = {
   'signet.contacts.read:directory':
-    'Read the directory: contact ids, type, display name, tier, tier source, identity pubkeys and linked pubkeys.',
-  'signet.contacts.read:methods':
-    'Read contact methods whose sharingPolicy is grantable (phone, email, website, postal address).',
+    'Read contact ids, display names and identity pubkeys only.',
+  'signet.contacts.read:method:phone':
+    'Read shareable phone contact methods.',
+  'signet.contacts.read:method:email':
+    'Read shareable email contact methods.',
+  'signet.contacts.read:method:website':
+    'Read shareable website contact methods.',
+  'signet.contacts.read:method:postal-address':
+    'Read shareable postal-address contact methods.',
+  'signet.contacts.read:method:other':
+    'Read shareable other contact methods.',
+  'signet.contacts.read:tier':
+    'Read Kin, Kith or Ken labels and whether a guardian set or limited them.',
+  'signet.contacts.read:checks':
+    'Read verification status on the keys and contact methods already granted.',
   'signet.contacts.read:roles':
     'Read the owner-assigned role labels on each contact.',
   'signet.contacts.blocks.read':
-    'Read blocked contacts, including their identity and linked pubkeys, so the app can filter them.',
+    'Read blocked contacts, including their identity pubkeys, so the app can filter them.',
   // R-28(d): signet-app applies an add-ken as soon as the batch validates —
   // there is no queue, no prompt, no owner decision. Describing it as a
   // request the owner answers made the consent false, so it says what happens:
