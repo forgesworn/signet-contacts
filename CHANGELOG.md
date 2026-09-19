@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Clarify identity-scoped grants and owner confirmation for cross-identity app
+  proposals in consent copy and wire documentation; wire shape is unchanged.
+- Document opaque, grant-local publication metadata for scoped projections.
+
 - Replace broad contact-method access with separate phone, email, website,
   postal-address and other-method capabilities; legacy broad grants do not expand.
 - Default directory access contains names and public keys only. Tiers and
@@ -84,3 +88,13 @@ signet-app file paths — is out of the shipped source; the reasoning those
 comments carried stays. British spelling throughout ("zeroised"). WIRE.md now
 documents the web and Android App Link pairing carriers alongside the
 `signet-grant:` scheme.
+
+## 2026-09-18 — draft app introductions
+
+- Add explicit invite issuance and delivery capabilities, separate from contact
+  list access, plus bounded app-to-rail requests and issuance/queueing replies.
+- Add `createAppInviteClient` with one outstanding request per grant. No peer
+  completion status, check result or private invite attribution is returned.
+- Producer policy permits five-minute first-request automatic acceptance only
+  for eligible single-use app invites, with a per-app opt-out and grant revocation.
+  Family/bot producer routing remains separate work; this draft is not released.

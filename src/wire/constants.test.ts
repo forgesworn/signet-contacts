@@ -35,10 +35,13 @@ describe('capability list', () => {
       'signet.contacts.read:method:other',
       'signet.contacts.read:tier',
       'signet.contacts.read:checks',
+      'signet.contacts.read:check-records',
       'signet.contacts.read:roles',
       'signet.contacts.blocks.read',
       'signet.contacts.propose:add-ken',
       'signet.contacts.propose:rename-app-label',
+      'signet.contacts.invites:create',
+      'signet.contacts.invites:receive',
     ]);
   });
 

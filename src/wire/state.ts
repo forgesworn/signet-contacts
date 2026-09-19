@@ -58,9 +58,16 @@ export function applyProjection(
   if (state.grantId !== null && state.grantId !== projection.grantId) return state;
 
   if (projection.revoked === true) {
+    // Apply even an out-of-order revocation, but never lower the replay floor.
+    // Otherwise an old tombstone followed by an intermediate old live snapshot
+    // could resurrect a grant that had already observed a newer frontier.
+    const held = state.projection?.frontier;
+    const incoming = projection.frontier;
+    const frontier = held && (held.publishedAt > incoming.publishedAt
+      || (held.publishedAt === incoming.publishedAt && held.maxClock > incoming.maxClock)) ? held : incoming;
     return {
       grantId: projection.grantId,
-      projection: { ...projection, contacts: [] },
+      projection: { ...projection, frontier: { ...frontier }, contacts: [] },
       receivedAt: nowSec,
       blockedPubkeys: state.blockedPubkeys,   // sticky through revocation
       revoked: true,

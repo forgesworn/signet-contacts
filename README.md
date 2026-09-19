@@ -187,3 +187,10 @@ the grant was revoked: `client.getBlockedSet()` is sticky and ignores both.
 ## Licence
 
 MIT.
+
+Pairing acknowledgements use ephemeral kind 21237. Supply `RelayIo.subscribe`
+(the bundled adapter does) so `awaitPairingAck` listens throughout the approval
+window; polling alone can miss an approval between queries. Pass an `AbortSignal`
+as `signal` to cancel that listener when the pairing UI closes. One attempt
+opens at most 32 distinct candidate ciphertexts, deduplicated by event ID; after
+that it returns `null` and requires a new explicit attempt.

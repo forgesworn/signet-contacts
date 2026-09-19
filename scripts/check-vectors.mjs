@@ -5,7 +5,7 @@ import { spawnSync } from 'node:child_process';
 
 const result = spawnSync(
   process.execPath,
-  ['node_modules/vitest/vitest.mjs', 'run', 'src/wire/vectors.test.ts'],
+  ['node_modules/vitest/vitest.mjs', 'run', 'src/wire/vectors.test.ts', 'src/wire/invite.test.ts', 'src/wire/channel-check.test.ts'],
   { stdio: 'inherit', env: { ...process.env, WRITE_VECTORS: '' } },
 );
 process.exit(result.status ?? 1);

@@ -122,6 +122,17 @@ export function parseProjectedContact(raw: unknown): ProjectedContact | null {
       .filter((m): m is ProjectedMethod => m !== null);
     if (methods.length > 0) contact.contactMethods = methods;
   }
+  if (Array.isArray(o.checks)) {
+    const checks: NonNullable<ProjectedContact['checks']> = [];
+    for (const raw of o.checks.slice(0, 128)) {
+      if (!raw || typeof raw !== 'object') continue;
+      const check = raw as Record<string, unknown>;
+      if (!isHex(check.pubkey, 64) || !['words', 'in-person', 'nip05', 'app-attested'].includes(String(check.method))
+        || !Number.isSafeInteger(check.checkedAt) || Number(check.checkedAt) < 0) continue;
+      checks.push({ pubkey: check.pubkey, method: check.method as NonNullable<ProjectedContact['checks']>[number]['method'], checkedAt: Number(check.checkedAt) });
+    }
+    if (checks.length) contact.checks = checks;
+  }
   if (Array.isArray(o.linkedPubkeys)) {
     const linked = o.linkedPubkeys
       .slice(0, MAX_LINKED_PUBKEYS)

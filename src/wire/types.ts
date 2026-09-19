@@ -46,7 +46,10 @@ export interface PairingV2 extends Omit<PairingAckV2, 'v' | 'challenge'> { paire
 export interface ProjectedIdentity { pubkey: string; verification?: ProjectedVerification }
 export interface ProjectedMethod { kind: ProjectedMethodKind; value: string; verification?: 'unverified' | 'proven' }
 export interface ProjectedAvatar { url: string; hash: string; key?: string }
+export interface ProjectedCheck { pubkey: string; method: 'words' | 'in-person' | 'nip05' | 'app-attested'; checkedAt: number }
 export interface ProjectedContact {
+  /** Method/date only, with explicit read:check-records consent. No private source or evidence. */
+  checks?: ProjectedCheck[];
   contactId: string;                 // grant-scoped opaque, 32 lowercase hex
   /** Legacy optional metadata; current producers omit it. */
   type?: ProjectedType;

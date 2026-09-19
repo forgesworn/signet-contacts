@@ -103,6 +103,26 @@ describe('applyProjection', () => {
     expect(blockedSetOf(unblocked).size).toBe(0);
   });
 
+  it('applies old revocations without lowering the persisted replay floor', () => {
+    const first = applyProjection(emptyContactsState(), projection(), ISSUED + 1);
+    const older = projection({ revoked: true, contacts: [],
+      frontier: { maxClock: 1, opCount: 1, publishedAt: ISSUED - 20, deviceId: DEVICE } });
+    const revoked = applyProjection(first, older, ISSUED + 2);
+    expect(revoked.revoked).toBe(true);
+    expect(visibleContacts(revoked)).toEqual([]);
+    expect(revoked.projection?.frontier).toEqual(first.projection?.frontier);
+    expect(blockedSetOf(revoked)).toEqual(blockedSetOf(first));
+    const restored = JSON.parse(JSON.stringify(revoked));
+    const intermediate = projection({ frontier: { maxClock: 99, opCount: 100, publishedAt: ISSUED - 10, deviceId: DEVICE } });
+    expect(applyProjection(restored, intermediate, ISSUED + 3)).toBe(restored);
+    const sameTimeOlder = projection({ revoked: true, frontier: { maxClock: 4, opCount: 9, publishedAt: ISSUED, deviceId: DEVICE } });
+    const again = applyProjection(restored, sameTimeOlder, ISSUED + 4);
+    expect(again.projection?.frontier.maxClock).toBe(5);
+    expect(applyProjection(again, projection(), ISSUED + 5)).toBe(again);
+    const newer = projection({ frontier: { maxClock: 1, opCount: 2, publishedAt: ISSUED + 1, deviceId: DEVICE } });
+    expect(applyProjection(again, newer, ISSUED + 6).revoked).toBe(false);
+  });
+
   it('keeps the blocked set through revocation and empties the contacts', () => {
     const first = applyProjection(emptyContactsState(), projection(), ISSUED + 1);
     const revoked = applyProjection(first, projection({

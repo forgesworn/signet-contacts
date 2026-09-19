@@ -46,10 +46,13 @@ export type Capability =
   | 'signet.contacts.read:method:other'
   | 'signet.contacts.read:tier'
   | 'signet.contacts.read:checks'
+  | 'signet.contacts.read:check-records'
   | 'signet.contacts.read:roles'
   | 'signet.contacts.blocks.read'
   | 'signet.contacts.propose:add-ken'
-  | 'signet.contacts.propose:rename-app-label';
+  | 'signet.contacts.propose:rename-app-label'
+  | 'signet.contacts.invites:create'
+  | 'signet.contacts.invites:receive';
 
 /** Order is binding: it is the order a grant screen lists them in, and the
  *  order `scopes` is normalised to before hashing. */
@@ -62,10 +65,13 @@ export const CAPABILITIES = [
   'signet.contacts.read:method:other',
   'signet.contacts.read:tier',
   'signet.contacts.read:checks',
+  'signet.contacts.read:check-records',
   'signet.contacts.read:roles',
   'signet.contacts.blocks.read',
   'signet.contacts.propose:add-ken',
   'signet.contacts.propose:rename-app-label',
+  'signet.contacts.invites:create',
+  'signet.contacts.invites:receive',
 ] as const satisfies readonly Capability[];
 
 const CAPABILITY_SET: ReadonlySet<string> = new Set<string>(CAPABILITIES);
@@ -90,6 +96,8 @@ export function normaliseCapabilities(input: readonly Capability[]): Capability[
  * automatically the words the owner should be shown.
  */
 export const CAPABILITY_DESCRIPTIONS: Record<Capability, string> = {
+  'signet.contacts.invites:create': 'Issue named contact invites for the paired identity; eligible single-use requests may be accepted automatically for five minutes.',
+  'signet.contacts.invites:receive': 'Hand over a contact invite and send a request from the paired identity; no connection result is returned.',
   'signet.contacts.read:directory':
     'Read contact ids, display names and identity pubkeys only.',
   'signet.contacts.read:method:phone':
@@ -104,18 +112,17 @@ export const CAPABILITY_DESCRIPTIONS: Record<Capability, string> = {
     'Read shareable other contact methods.',
   'signet.contacts.read:tier':
     'Read Kin, Kith or Ken labels and whether a guardian set or limited them.',
+  'signet.contacts.read:check-records':
+    'Read check methods and dates for shared public keys. Private sources and evidence stay private.',
   'signet.contacts.read:checks':
     'Read verification status on the keys and contact methods already granted.',
   'signet.contacts.read:roles':
     'Read the owner-assigned role labels on each contact.',
   'signet.contacts.blocks.read':
     'Read blocked contacts, including their identity pubkeys, so the app can filter them.',
-  // R-28(d): signet-app applies an add-ken as soon as the batch validates —
-  // there is no queue, no prompt, no owner decision. Describing it as a
-  // request the owner answers made the consent false, so it says what happens:
-  // the app adds the contact, at the weakest distance the model has.
+  // New keys may be added directly; cross-identity links require owner review.
   'signet.contacts.propose:add-ken':
-    'Add contacts to your Ken list (recognised only, no access).',
+    'Add contacts to your Ken list (recognised only, no access). Links to an existing contact under another identity need your confirmation.',
   'signet.contacts.propose:rename-app-label':
     'Propose a rename that applies only inside this grant’s own projection.',
 };

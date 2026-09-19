@@ -1019,3 +1019,40 @@ describe('pendingProposals (R-9)', () => {
     expect(second[0]!.action).toBe('add-ken');
   });
 });
+
+describe('ephemeral pairing acknowledgements', () => {
+  it('keeps a live listener between polling queries and removes it after approval', async () => {
+    const signer = fakeSigner(), stopped = vi.fn();
+    let receive!: (event: SignedNostrEvent) => void;
+    const content = await signer.nip44Encrypt(APP, buildPairingAckV2({ v: 2, grantId: GRANT, railPubkey: RAIL,
+      projectionTag: projectionTag(GRANT), proposalTag: proposalTag(GRANT, APP), relay: RELAYS[0],
+      grantedCapabilities: ['signet.contacts.read:directory'], maxStalenessSeconds: 21600, challenge: CHALLENGE }));
+    const client = createSignetContactsClient({ signer, now: () => 1700000000, relay: {
+      fetchNewest: async () => null, publish: async () => true,
+      subscribe: (_filter, _relays, callback) => { receive = callback; return stopped; },
+    } });
+    const waiting = client.awaitPairingAck({ challenge: CHALLENGE, relays: RELAYS, pollMs: 10000 });
+    await Promise.resolve(); await Promise.resolve();
+    receive({ ...ackEventTemplate('9'.repeat(64), APP, 1700000000, content), id: '4'.repeat(64), sig: '5'.repeat(128) });
+    expect((await waiting)?.grantId).toBe(GRANT);
+    expect(stopped).toHaveBeenCalledOnce();
+  });
+  it('cancels a waiting live listener without accepting a late acknowledgement', async () => {
+    const controller = new AbortController(), stopped = vi.fn(), signer = fakeSigner();
+    const client = createSignetContactsClient({ signer, relay: { fetchNewest: async () => null,
+      publish: async () => true, subscribe: () => stopped } });
+    const waiting = client.awaitPairingAck({ challenge: CHALLENGE, relays: RELAYS, signal: controller.signal });
+    controller.abort();
+    expect(await waiting).toBeNull(); expect(stopped).toHaveBeenCalledOnce();
+  });
+  it('limits identity decryption to 32 unique candidates for one pairing attempt', async () => {
+    const signer = fakeSigner(); signer.nip44Decrypt = vi.fn(async () => { throw new Error('not our ack'); });
+    let id = 0;
+    const client = createSignetContactsClient({ signer, now: () => 1700000000, relay: {
+      fetchNewest: async () => ({ ...ackEventTemplate('9'.repeat(64), APP, 1700000000, 'junk'),
+        id: (++id).toString(16).padStart(64, '0'), sig: '5'.repeat(128) }), publish: async () => true,
+    } });
+    expect(await client.awaitPairingAck({ challenge: CHALLENGE, relays: RELAYS, pollMs: 0, timeoutMs: 5000 })).toBeNull();
+    expect(signer.nip44Decrypt).toHaveBeenCalledTimes(32);
+  });
+});

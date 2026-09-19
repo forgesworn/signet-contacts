@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
-  buildProjection, parseProjection, projectionByteLength, projectionEventTemplate, projectionFilter,
+  parseProjectedContact, buildProjection, parseProjection, projectionByteLength, projectionEventTemplate, projectionFilter,
 } from './projection.js';
 import { projectionTag } from './ids.js';
 import {
@@ -354,4 +354,12 @@ it('round-trips a method value without requiring a verification disclosure', () 
   expect(parseProjection(buildProjection(projection({
     scopes: ['signet.contacts.read:directory', 'signet.contacts.read:method:email'], contacts: [minimal],
   })))?.contacts).toEqual([minimal]);
+});
+
+it('allowlists check summaries and strips private sources and evidence', () => {
+  const parsed = parseProjectedContact({ contactId: 'a'.repeat(32), checks: [
+    { pubkey: 'b'.repeat(64), method: 'words', checkedAt: 1000, source: 'website', evidence: 'private link', ownerIdentityPubkey: 'c'.repeat(64) },
+    { pubkey: 'b'.repeat(64), method: 'invented', checkedAt: 1000 },
+  ] });
+  expect(parsed?.checks).toEqual([{ pubkey: 'b'.repeat(64), method: 'words', checkedAt: 1000 }]);
 });

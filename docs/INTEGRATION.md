@@ -243,3 +243,19 @@ subscription per client: calling `start` again replaces the previous one.
 | 4. Apply Blocked | `getBlockedSet` at ingress and at display |
 | 5. Propose | `propose`, `pendingProposals`, `onRevoked` |
 | 6. Stay current | `start` (live + poll fallback), `stop` |
+
+### Check choices and local key lookup
+
+Ask the product developer which entries from `CONTACT_CHECK_MENU` to enable.
+The menu is not a ranking and user-recorded checks are not third-party proof.
+`lookupContactKey(state, pubkey, { now, displayName })` reads only the granted
+snapshot: known key, absent key, same-name/different-key clash, or unavailable
+when no directory was granted or the grant was revoked. Inspect `fresh` and
+`blocked` separately; expiry never erases a block. Never turn a name clash into
+an automatic key replacement. No network requests are made by this helper.
+
+Request `signet.contacts.read:check-records` for method/date summaries; an older
+verification-status grant does not imply that permission. Source and evidence
+remain in My Signet. NIP-05 checks require an explicit user tap and should show
+the checked domain and date. Record-check proposals from apps remain deferred;
+the menu does not grant permission to write a user's checks.

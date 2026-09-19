@@ -72,7 +72,7 @@ export interface SignetContactsClient {
   buildPairingUri(opts: Omit<PairingUriOptionsV2, 'appPubkey'>): string;
   parsePairingUri(input: string, opts?: { nowSec?: number; freshnessSeconds?: number }): PairingRequestV2Result;
   awaitPairingAck(opts: {
-    challenge: string; relays: string[]; timeoutMs?: number; pollMs?: number;
+    challenge: string; relays: string[]; timeoutMs?: number; pollMs?: number; signal?: AbortSignal;
     /** The app's OWN request, so a producer cannot
      *  grant a capability nobody asked for. Omitted only by a caller that
      *  chose not to enforce narrowing itself. */
@@ -378,7 +378,7 @@ export function createSignetContactsClient(opts: {
       return parsePairingRequestV2(input, parseOpts);
     },
 
-    async awaitPairingAck({ challenge, relays, timeoutMs = 120_000, pollMs = 2000, requestedCapabilities }) {
+    async awaitPairingAck({ challenge, relays, timeoutMs = 120_000, pollMs = 2000, requestedCapabilities, signal }) {
       const deadline = Date.now() + timeoutMs;
       // I3: several candidates, not one. See `ACK_CANDIDATE_LIMIT`.
       const filter: NostrFilterLike = {
@@ -386,56 +386,88 @@ export function createSignetContactsClient(opts: {
       };
       const allowed = requestedCapabilities ? new Set<Capability>(requestedCapabilities) : null;
 
-      while (Date.now() < deadline) {
-        // Hostile or merely broken relay data must never escape this loop as a
-        // thrown exception — a bad event is exactly as "no ack yet" as no event.
+      const live: SignedNostrEvent[] = [];
+      const attempted = new Set<string>();
+      let wake: (() => void) | undefined;
+      let stop: (() => void) | undefined;
+      const abort = () => wake?.();
+      if (signal?.aborted) return null;
+      signal?.addEventListener('abort', abort, { once: true });
+      try {
+        // Kind 21237 is ephemeral. A polling query can close on EOSE before
+        // the owner's approval arrives, so hold a live listener for the whole
+        // pairing window. Polling remains a fallback for historical producers.
         try {
-          const candidates = await fetchAckCandidates(filter, relays);
-          for (const event of candidates) {
-            if (!event || typeof event.pubkey !== 'string' || typeof event.content !== 'string') continue;
-            // Bounded, like the projection path: an oversized `content` is
-            // refused before it can buy a signer round-trip.
-            if (event.content.length > MAX_ENVELOPE_CHARS) continue;
-            // The ack payload carries no timestamp of
-            // its own, so freshness is judged on the carrier EVENT's
-            // `created_at` — an old ack replayed by a relay must not resurrect
-            // a pairing the app has long since given up polling for.
-            const createdAt = event.created_at;
-            const fresh = typeof createdAt === 'number' && Number.isFinite(createdAt)
-              && Math.abs(now() - createdAt) <= PAIRING_FRESHNESS_SECONDS;
-            if (!fresh) continue;
-            try {
-              const plaintext = await signer.nip44Decrypt(event.pubkey, event.content);
-              const ack = parsePairingAckV2(plaintext, challenge);
-              if (!ack) continue;
-              // Narrowing only. A producer that
-              // grants a capability the app never requested is either a bug
-              // or an attempt to smuggle scope past the app's own consent
-              // screen — either way this is not a valid ack for this request.
-              const overGranted = allowed !== null
-                && ack.grantedCapabilities.some((c) => !allowed.has(c));
-              // A rail that is the app's OWN pubkey is
-              // nonsensical for this wire (the app cannot be its own
-              // signing rail) and would make the projection's later
-              // author-pin check trivially satisfiable by anything the
-              // app itself ever publishes — reject rather than pair.
-              const selfRail = ack.railPubkey.toLowerCase() === signer.pubkey.toLowerCase();
-              if (!overGranted && !selfRail) return pairingFromAck(ack, now());
-            } catch {
-              // Not our ack, or not decryptable by us — try the next candidate
-              // rather than failing the whole pairing on one stray event
-              // addressed to us. (S7: NIP-44 is the real authentication gate.)
+          stop = relay.subscribe?.(filter, relays, event => {
+            if (signal?.aborted || attempted.has(event.id)) return;
+            if (!live.some(held => held.id === event.id)) live.push(event);
+            if (live.length > ACK_CANDIDATE_LIMIT) live.shift();
+            wake?.();
+          });
+        } catch { /* A failed live connection can still retry through polling. */ }
+        while (Date.now() < deadline && !signal?.aborted && attempted.size < 32) {
+          // Hostile or merely broken relay data must never escape this loop as a
+          // thrown exception — a bad event is exactly as "no ack yet" as no event.
+          try {
+            const polled = await fetchAckCandidates(filter, relays).catch(() => []);
+            const candidates = [...live.splice(0), ...polled];
+            for (const event of candidates) {
+              if (signal?.aborted || attempted.size >= 32) return null;
+              if (!event || typeof event.pubkey !== 'string' || typeof event.content !== 'string') continue;
+              // Bounded, like the projection path: an oversized `content` is
+              // refused before it can buy a signer round-trip.
+              if (event.content.length > MAX_ENVELOPE_CHARS) continue;
+              // The ack payload carries no timestamp of
+              // its own, so freshness is judged on the carrier EVENT's
+              // `created_at` — an old ack replayed by a relay must not resurrect
+              // a pairing the app has long since given up polling for.
+              const createdAt = event.created_at;
+              const fresh = typeof createdAt === 'number' && Number.isFinite(createdAt)
+                && Math.abs(now() - createdAt) <= PAIRING_FRESHNESS_SECONDS;
+              if (!fresh || typeof event.id !== 'string' || attempted.has(event.id)) continue;
+              attempted.add(event.id);
+              try {
+                const plaintext = await signer.nip44Decrypt(event.pubkey, event.content);
+                if (signal?.aborted) return null;
+                const ack = parsePairingAckV2(plaintext, challenge);
+                if (!ack) continue;
+                // Narrowing only. A producer that
+                // grants a capability the app never requested is either a bug
+                // or an attempt to smuggle scope past the app's own consent
+                // screen — either way this is not a valid ack for this request.
+                const overGranted = allowed !== null
+                  && ack.grantedCapabilities.some((c) => !allowed.has(c));
+                // A rail that is the app's OWN pubkey is
+                // nonsensical for this wire (the app cannot be its own
+                // signing rail) and would make the projection's later
+                // author-pin check trivially satisfiable by anything the
+                // app itself ever publishes — reject rather than pair.
+                const selfRail = ack.railPubkey.toLowerCase() === signer.pubkey.toLowerCase();
+                if (!overGranted && !selfRail) return pairingFromAck(ack, now());
+              } catch {
+                // Not our ack, or not decryptable by us — try the next candidate
+                // rather than failing the whole pairing on one stray event
+                // addressed to us. (S7: NIP-44 is the real authentication gate.)
+              }
             }
+          } catch {
+            // A transport that throws is treated the same as one that answered
+            // "nothing yet" — see the module-header note on hostile relay data.
           }
-        } catch {
-          // A transport that throws is treated the same as one that answered
-          // "nothing yet" — see the module-header note on hostile relay data.
+          const remaining = deadline - Date.now();
+          if (remaining <= 0 || signal?.aborted || attempted.size >= 32) break;
+          if (live.length > 0) continue;
+          await new Promise<void>(resolve => {
+            const timer = setTimeout(() => { wake = undefined; resolve(); }, Math.min(pollMs, remaining));
+            wake = () => { clearTimeout(timer); wake = undefined; resolve(); };
+            if (signal?.aborted) wake();
+          });
         }
-        const remaining = deadline - Date.now();
-        if (remaining <= 0) break;
-        await sleep(Math.min(pollMs, remaining));
+        return null;
+      } finally {
+        try { stop?.(); } catch { /* Teardown cannot change an accepted result. */ }
+        wake?.(); signal?.removeEventListener('abort', abort);
       }
-      return null;
     },
 
     async fetchProjection(pairing) {

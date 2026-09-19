@@ -211,14 +211,19 @@ producer that puts an `ownerPubkey` field on the body anyway is not rejected;
 the field is simply not part of this wire, so the parser drops it and no
 consumer ever sees it.
 
-A projection is a **snapshot**: `frontier` says who published it and when.
+A projection is a **snapshot**: `frontier` carries publication metadata.
 Newest wins by `(publishedAt, maxClock)` — **`publishedAt` is compared first**
 and `maxClock` only breaks a tie between two devices that published in the same
 second; an exact tie on both is not newer and is ignored. There is no
 per-operation id list on the wire.
 
-The order is deliberately recency-first (R-30). `maxClock` measures how much of
-the owner's contact log the publishing DEVICE has seen, not how recent its
+Producers may set `maxClock` and `opCount` to zero and use a grant-local opaque
+32-hex token for `deviceId`, avoiding disclosure of hidden vault activity or a
+cross-grant device identifier. Consumers must not treat these fields as a count
+of visible contacts or as a stable owner identity.
+
+The order is deliberately recency-first (R-30). When supplied, `maxClock` measures
+how much of the contact log the publishing device has seen, not how recent its
 snapshot is: a block entered on a second device that has not yet merged the
 first device's recent operations carries a clock no higher than one the
 consumer already holds, and a clock-first order would refuse that whole
@@ -269,10 +274,11 @@ producer-side id.
 | `signet.contacts.read:method:postal-address` | Read shareable postal-address contact methods. | Postal-address `contactMethods` only |
 | `signet.contacts.read:method:other` | Read shareable other contact methods. | Other `contactMethods` only |
 | `signet.contacts.read:tier` | Read Kin, Kith or Ken labels and whether a guardian set or limited them. | `effectiveTier`, `tierSource` |
+| `signet.contacts.read:check-records` | Read check methods and dates for shared public keys. Private sources and evidence stay private. | `checks[]`: `pubkey`, `method`, `checkedAt` |
 | `signet.contacts.read:checks` | Read verification status on the keys and contact methods already granted. | `identities[].verification`, `contactMethods[].verification` |
 | `signet.contacts.read:roles` | Read the owner-assigned role labels on each contact. | `roles` |
 | `signet.contacts.blocks.read` | Read blocked contacts, including their identity pubkeys, so the app can filter them. | `blocked`, `identities[].pubkey` |
-| `signet.contacts.propose:add-ken` | Add contacts to your Ken list (recognised only, no access). | `add-ken` proposals |
+| `signet.contacts.propose:add-ken` | Add contacts to your Ken list (recognised only, no access). Links to an existing contact under another identity need your confirmation. | `add-ken` proposals |
 | `signet.contacts.propose:rename-app-label` | Propose a rename that applies only inside this grant’s own projection. | `rename-app-label` proposals |
 
 Only `read:directory` is preselected on the grant screen. All other requested
@@ -289,13 +295,18 @@ emitted by My Signet. Old SDKs requiring tier/check fields may reject the smalle
 snapshot; update the SDK before reconnecting. This is a change before the first
 SDK release, not a compatibility promise for published consumers.
 
-`propose:add-ken` is named for the channel it uses, not for a review step:
-signet-app applies a valid `add-ken` as soon as the batch validates, so the app
-ADDS the contact rather than asking the owner to. It lands at Ken — a key the
-owner recognises — which grants nothing by itself; the producer caps what an
-app-authored contact can reach and drops app-created records first when a
-projection has to be truncated, so app volume cannot evict the owner's real
-contacts. Do not describe this capability to a person as "ask you to add".
+Each Signet grant covers one owning identity's contact list within its vault.
+Other list memberships and vault-wide operation counts are never disclosed.
+Legacy vault-wide grants require reconnection for fresh consent.
+
+A valid `add-ken` can add a new key directly at Ken. If the key exists under
+another identity, the link waits for owner confirmation. Even after approval,
+the app receives only what it supplied, plus appropriately granted fields the
+user subsequently adds under that identity. It cannot use proposals to read
+existing names, methods, checks or tier from another list. Additions are capped
+per grant. Proposal refusal, pending review and existence under another identity
+are not returned as lookup results. Apps should treat their projection as the
+only directory they can read, and tolerate delayed or absent additions.
 
 Private links are not included, even in a blocks-only projection.
 
@@ -395,3 +406,45 @@ WRITE_VECTORS=1 npx vitest run src/wire/vectors.test.ts
 then re-run `npx vitest run src/wire/vectors.test.ts` (or `npm run
 vectors:check`) without the flag to confirm the new bytes are stable and to
 catch an accidental drift on the next run.
+
+
+### Private check summaries (unreleased addition)
+
+`checks` is optional and has at most 128 entries. Each entry contains a shared
+contact `pubkey`, `method` (`words`, `in-person`, `nip05`, `app-attested`) and
+`checkedAt` as Unix milliseconds. These are the user's records, not proof for a
+relying app. The parser drops malformed entries and allowlists those three
+fields. Sources, evidence, identity-list membership and exchange transcripts
+remain private. Checks do not change relationship tier or inherit between lists.
+
+The new `signet.contacts.read:check-records` capability requires explicit consent
+and directory access. Existing `signet.contacts.read:checks` grants continue to
+share only the previous verification summaries. Reconnect for the new permission;
+older producers reject the unknown capability. Existing frozen vectors are
+unchanged.
+
+## App introductions (draft, owner identities)
+
+- `signet.contacts.invites:create`: Issue named contact invites for the paired identity; eligible single-use requests may be accepted automatically for five minutes.
+- `signet.contacts.invites:receive`: Hand over a contact invite and send a request from the paired identity; no connection result is returned.
+
+These capabilities do not imply directory access. Family policies and bot signer
+routing must be implemented before producers offer them for those directories.
+Use `createAppInviteClient({ signer, relay })` with `requestInvite(pairing)` or
+`handOverInvite(pairing, invite)`. Keep one outstanding request per grant across
+all client instances. The RelayIo contract authenticates signatures; the bundled
+nostr-tools adapter uses its verifying relay pool.
+
+Requests use kind 30078, app → rail NIP-44, with exactly one `d` tag
+`signet:contacts:app-invite:<grantId>`. JSON fields: v=1, grantId, requestId (32 hex),
+createdAt (seconds), action (`create-invite` with mode `single-use`/`standing`, or
+`receive-invite` with invite). Lifetime is 300 seconds; future clocks are rejected.
+Replies use kind 30078, rail → app NIP-44, tag
+`signet:contacts:app-invite:<grantId>:<requestId>`, and echo v/grantId/requestId.
+They carry createdAt plus `issued` with invite or `queued` without invite.
+No completion, other-contact existence, check, or private attribution is returned.
+Parsers cap JSON at 8192 characters; producers and clients cap ciphertext at 16384.
+App revocation disables its invitations. Automatic acceptance requires a current
+explicit grant, its enabled per-app switch, the first single-use arrival, and the
+five-minute window. Standing invites never auto-accept. Identity signer refusal
+is retained for manual retry, not repeatedly prompted in the background.
