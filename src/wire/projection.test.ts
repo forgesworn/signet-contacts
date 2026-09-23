@@ -231,11 +231,10 @@ describe('buildProjection / parseProjection', () => {
     }
   });
 
-  it('still refuses a non-https avatar url and a non-hex key on a bare contact parse', () => {
-    expect(parseProjectedContact({ ...contact(), avatar: { url: 'javascript:alert(1)', hash: 'c'.repeat(64) } })?.avatar)
-      .toBeUndefined();
-    expect(parseProjectedContact({ ...contact(), avatar: { url: 'https://x.example/a', hash: 'c'.repeat(64), key: 'nope' } })?.avatar?.key)
-      .toBeUndefined();
+  it('refuses a contact carrying an avatar even under every read scope', () => {
+    expect(parseProjectedContact({ ...contact(), avatar: { url: 'https://x.example/a', hash: 'c'.repeat(64) } }, FULL_SCOPES))
+      .toBeNull();
+    expect(parseProjectedContact(contact(), FULL_SCOPES)).not.toBeNull();
   });
 
   it('strips fields outside the allowlist from a wire contact', () => {
@@ -361,7 +360,7 @@ it('allowlists check summaries and strips private sources and evidence', () => {
   const parsed = parseProjectedContact({ contactId: 'a'.repeat(32), checks: [
     { pubkey: 'b'.repeat(64), method: 'words', checkedAt: 1000, source: 'website', evidence: 'private link', ownerIdentityPubkey: 'c'.repeat(64) },
     { pubkey: 'b'.repeat(64), method: 'invented', checkedAt: 1000 },
-  ] });
+  ] }, ['signet.contacts.read:directory', 'signet.contacts.read:check-records']);
   expect(parsed?.checks).toEqual([{ pubkey: 'b'.repeat(64), method: 'words', checkedAt: 1000 }]);
 });
 

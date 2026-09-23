@@ -78,13 +78,14 @@ function parseAvatar(raw: unknown): ProjectedAvatar | undefined {
 }
 
 /** Parse one contact. Returns null when the contact cannot be trusted at all;
- *  an individually unparseable OPTIONAL field is dropped, not fatal. When
- *  `scopes` is given, a contact carrying a field those scopes do not cover
- *  (`FIELD_COVERAGE`) is also null — `parseProjection` goes further and
- *  refuses the whole projection. */
-export function parseProjectedContact(raw: unknown, scopes?: Iterable<string>): ProjectedContact | null {
+ *  an individually unparseable OPTIONAL field is dropped, not fatal. `scopes`
+ *  is required: a contact carrying a field those scopes do not cover
+ *  (`FIELD_COVERAGE`) is null, so there is no way to parse a contact without
+ *  the coverage check. `parseProjection` goes further and refuses the whole
+ *  projection. */
+export function parseProjectedContact(raw: unknown, scopes: Iterable<string>): ProjectedContact | null {
   if (typeof raw !== 'object' || raw === null) return null;
-  if (scopes !== undefined && uncoveredContactFields(raw, scopes).length > 0) return null;
+  if (uncoveredContactFields(raw, scopes).length > 0) return null;
   const o = raw as Record<string, unknown>;
   if (!isHex(o.contactId, 32)) return null;
   if (o.type !== undefined && (typeof o.type !== 'string' || !TYPES.includes(o.type as ProjectedType))) return null;
@@ -191,7 +192,7 @@ export function parseProjection(json: string): ContactProjectionV2 | null {
   // drop — it is a producer out of contract, so the whole projection goes.
   if (delivered.some((c) => uncoveredContactFields(c, scopes).length > 0)) return null;
   const contacts = delivered
-    .map((c) => parseProjectedContact(c))
+    .map((c) => parseProjectedContact(c, scopes))
     .filter((c): c is ProjectedContact => c !== null)
     .filter((c) => {
       if (seenContactIds.has(c.contactId)) return false;

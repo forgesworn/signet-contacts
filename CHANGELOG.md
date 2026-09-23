@@ -26,6 +26,8 @@
   parse. `vectors/projection.v2.json` is regenerated for the contract freeze:
   every case carries only covered fields, the full case gains the scopes it
   needs, and a new `uncovered` list holds projections a parser must refuse.
+- **Breaking (API, pre-release):** `parseProjectedContact(raw, scopes)` now requires
+  `scopes`, so no caller can parse a contact without the field-coverage check.
 - Clarify identity-scoped grants and owner confirmation for cross-identity app
   proposals in consent copy and wire documentation; wire shape is unchanged.
 - Document opaque, grant-local publication metadata for scoped projections.
