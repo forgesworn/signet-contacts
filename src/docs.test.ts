@@ -247,3 +247,52 @@ describe('docs/INTEGRATION.md and SECURITY.md', () => {
     expect(security).toMatch(/rail (private )?key|rail nsec/i);
   });
 });
+
+// The co-maintainer's contract ruling: separate message versions are fine,
+// but the wire spec must say which kind carries which `v`, which routing tags
+// are readable, and which older readers are unsupported. These pin the table
+// to what the code actually builds, so the two cannot drift apart again.
+describe('docs/WIRE.md message-version contract', () => {
+  const invite = readFileSync('docs/contact-invite-v1.md', 'utf8');
+  const tableRow = (label: string): string => {
+    const row = wire.split('\n').find((line) => line.startsWith(`| ${label} |`));
+    expect(row, `no version-table row for ${label}`).toBeDefined();
+    return row as string;
+  };
+
+  it('no longer claims a single version or universally hashed tags', () => {
+    expect(wire).not.toMatch(/"v": 2` field on every JSON payload/);
+    expect(wire).not.toContain('Every routing tag is a domain-separated');
+  });
+
+  it('gives each message kind the version its code builds', async () => {
+    const { WIRE_VERSION, PAIRING_VERSION, buildProposalBatch, appInviteTag } = await import('./wire/index.js');
+    expect(tableRow('Pairing URI')).toContain(`\`v=${PAIRING_VERSION}\``);
+    expect(tableRow('Pairing ack')).toContain(`| \`${WIRE_VERSION}\` |`);
+    expect(tableRow('Projection body')).toContain(`| \`${WIRE_VERSION}\` |`);
+    const batch = JSON.parse(buildProposalBatch([{
+      v: 1, grantId: 'a'.repeat(32), operationId: 'b'.repeat(32), action: 'add-ken',
+      value: { pubkey: 'c'.repeat(64), displayName: 'Ada' }, createdAt: 1,
+    }])) as { v: number };
+    expect(tableRow('Proposal batch, and each proposal in it')).toContain(`| \`${batch.v}\` |`);
+    const appRow = tableRow('App-introduction request');
+    expect(appRow).toContain('| `1` |');
+    expect(appRow).toContain('**readable**');
+    expect(appInviteTag('a'.repeat(32))).toBe(`signet:contacts:app-invite:${'a'.repeat(32)}`);
+    expect(tableRow('Projection body')).toContain('**hashed**');
+    expect(tableRow('Contact invite')).toContain('| `1` |');
+  });
+
+  it('states the unsupported readers, the checks shape and the consent rule', () => {
+    expect(wire).toContain('### Unsupported readers');
+    expect(wire).toContain('`checks[].checkedAt`');
+    expect(wire).toContain('## 10. Consent and grant changes');
+    expect(wire).toMatch(/Ordinary updates keep the existing approval/);
+    expect(wire).toMatch(/fresh consent/);
+  });
+
+  it('marks invitations final, not draft', () => {
+    expect(invite).not.toMatch(/draft/i);
+    expect(wire).not.toMatch(/App introductions \(draft/);
+  });
+});

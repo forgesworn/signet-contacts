@@ -1,13 +1,68 @@
-# Contacts app-access wire — v2 specification
+# Contacts app-access wire — v2 contract
 
 This is the language-neutral specification of the wire `@forgesworn/signet-contacts`
 implements. It exists so an implementation in a language other than TypeScript
 (a Dart mobile client, for instance) can be built without reading the SDK's own
 source — everything here is normative for a byte-compatible implementation.
 
-`v=2` (the pairing URI parameter and the `"v": 2` field on every JSON payload)
-is the version marker. A `v=1` payload belongs to the older Kenspeckle
-companion rail this wire extends and is a different, incompatible format.
+**Status: frozen.** The capability-scoped v2 contract below — the message
+versions in §0, the capability list in §6 and the consent rule in §10 — is the
+contract for the first release. Changing any of it needs a new message version
+and, for anything that widens what an app can read, a fresh pairing.
+
+## 0. Message versions
+
+"v2" names the **app-access rail** (pairing, ack, vault envelope, projection);
+`WIRE_VERSION = 2` in the SDK. It is **not** a claim that every payload carries
+`"v": 2`. Each message kind is versioned on its own, and a reader must require
+exactly the `v` in this table for that kind — any other value is rejected
+(`null`, or the `bad-version` warning for a pairing URI), never coerced or
+negotiated.
+
+| Message | `v` | Carrier | Routing tag | Tag form | Defined in |
+|---|---|---|---|---|---|
+| Pairing URI | `v=2` (query string) | QR code or link, not an event | — | — | §3; `src/wire/pairing.ts` |
+| Pairing ack | `2` | kind `21237`, ephemeral key → app, NIP-44 | `["p", appPubkey]` | readable (the app pubkey is already public in the QR) | §3, §5; `src/wire/ack.ts` |
+| Vault envelope | `2` | the projection event's `content` | — | — | §1; `src/wire/envelope.ts` |
+| Projection body | `2` | kind `30078`, rail → app, inside the vault envelope | `d` = `projectionTag(grantId)` | **hashed** | §5; `src/wire/projection.ts` |
+| Proposal batch, and each proposal in it | `1` | kind `30078`, app → rail, NIP-44 | `d` = `proposalTag(grantId, appPubkey)` | **hashed** | §5; `src/wire/proposal.ts` |
+| App-introduction request | `1` | kind `30078`, app → rail, NIP-44 | `d` = `signet:contacts:app-invite:<grantId>` | **readable** | App introductions; `src/wire/app-invite.ts` |
+| App-introduction reply | `1` | kind `30078`, rail → app, NIP-44 | `d` = `signet:contacts:app-invite:<grantId>:<requestId>` | **readable** | App introductions; `src/wire/app-invite.ts` |
+| Contact invite | `1` | QR code or link, not an event | — | — | `docs/contact-invite-v1.md`; `src/wire/invite.ts` |
+| Contact request / acceptance / reveal | `1` | kind-13 seal inside a sealed packet inside kind `1059` | `["p", mailboxPubkey]` | readable (the mailbox key is derived from the invite secret, so it means something only to invite holders) | `docs/contact-invite-v1.md`; `src/wire/invite.ts` |
+| Sealed contact packet | `1` | inner layer of that kind `1059` | — | — | `docs/contact-invite-v1.md`; `src/adapters/invite-nostr-tools.ts` |
+| Channel-check request / accept / reveal | `1` | the host app's own authenticated channel | — | — | `docs/channel-check-v1.md` — **draft, outside this contract** |
+
+A **readable** tag is visible to anyone reading the relay. The app-introduction
+tags carry the `grantId` in the clear, so a relay observer who sees one can
+compute that grant's `projectionTag` and link the two slots. The payloads stay
+NIP-44 encrypted; only the routing is linkable. Separate message versions are
+deliberate: a version number is meaningful only within its own message kind.
+
+### Unsupported readers
+
+None of the following is supported, and none of them fails open:
+
+- **Kenspeckle v1 companion-rail readers.** A `v=1` `signet-grant:` URI or a
+  `v: 1` kind-21237 ack belongs to that older rail. This SDK refuses both
+  (`bad-version` / `null`), and a v1 reader handed a v2 URI, ack or projection
+  cannot parse it — it sees no pairing at all, never a partial grant.
+- **Readers expecting a bare NIP-44 projection.** A plain `nip44Decrypt` of a
+  projection's `content` fails; such a reader sees nothing (§1).
+- **Pre-release builds of this SDK from before this contract** — any build that
+  still knows `signet.contacts.read:methods`, or that requires tier or
+  verification fields on every contact. They drop capability tokens they do not
+  know, so they believe the grant is narrower than the owner approved; they
+  never see `checks`; and one that requires tier or check fields may reject a
+  current, smaller snapshot. Update the SDK, then pair again.
+- **Older producers.** A producer that does not know a capability token rejects
+  a pairing request carrying it, so `awaitPairingAck` returns `null`, the same
+  as a timeout or a refusal.
+- **A message with any other `v`** than the table gives for its kind. It is
+  dropped. A future version is a new pairing (rail) or a new profile (invites),
+  never a silent upgrade.
+- **Standard NIP-59 `unwrapEvent`.** It cannot open a contact-exchange packet;
+  the extra inner layer is deliberate (`docs/contact-invite-v1.md`).
 
 ## 1. Sealing — the vault envelope (R-4)
 
@@ -129,9 +184,12 @@ the reader has never seen it before. NIP-44 and the challenge are the gate.
 
 ## 4. Tag derivations
 
-Every routing tag is a domain-separated SHA-256 digest truncated to 128 bits
-(32 lowercase hex characters), so it is opaque on the relay: a scraper of kind
-30078 sees a random-looking `d` tag, never `signet:contacts:…` in the clear.
+The app-access rail's routing tags — the projection and proposal `d` tags —
+and the scoped contact id are domain-separated SHA-256 digests truncated to 128
+bits (32 lowercase hex characters), so they are opaque on the relay: a scraper
+of kind 30078 sees a random-looking `d` tag for these two slots. This is **not**
+true of every tag on the wire: the app-introduction `d` tags are readable and
+the ack and contact-exchange events carry a readable `p` tag (§0).
 
 ```
 projectionTag(grantId)              = sha256hex('signet:contacts:proj:' + grantId)[0..32]
@@ -191,6 +249,7 @@ default `21600` when absent or invalid) by `clampStaleness`.
 | `displayName` | sanitised string | ≤ 100 chars (`MAX_DISPLAY_NAME`) |
 | `avatar.url` | `https://` only | ≤ 512 chars (`MAX_URL_LEN`) |
 | `avatar.hash` | 64-hex | — |
+| `avatar.key` (optional) | 64-hex | — |
 | `effectiveTier` (optional) | `'kin' \| 'kith' \| 'ken' \| 'none'` | — |
 | `tierSource` (optional) | `'direct' \| 'guardian-vouched' \| 'guardian-limited'` | — |
 | `roles` | `string[]`, sanitised | ≤ 8 items (`MAX_ROLES_PER_CONTACT`), ≤ 40 chars each (`MAX_ROLE_LEN`) |
@@ -198,6 +257,10 @@ default `21600` when absent or invalid) by `clampStaleness`.
 | `contactMethods[].value` | sanitised string | ≤ 320 chars (`MAX_METHOD_VALUE`) |
 | `contactMethods[].verification` (optional) | `'unverified' \| 'proven'` | — |
 | `blocked` (optional) | boolean | — |
+| `checks[]` (optional) | array of check records | ≤ 128 entries; a malformed entry is dropped |
+| `checks[].pubkey` | 64-hex (producers list only keys already shared on this contact) | — |
+| `checks[].method` | `'words' \| 'in-person' \| 'nip05' \| 'app-attested'` | — |
+| `checks[].checkedAt` | non-negative safe integer, **Unix milliseconds** | — |
 | `linkedPubkeys` (legacy, optional) | `string[]` of 64-hex | ≤ 16 items (`MAX_LINKED_PUBKEYS`) |
 
 There is **no owner pubkey on this wire** (R-31). A connected app learns the
@@ -408,7 +471,7 @@ vectors:check`) without the flag to confirm the new bytes are stable and to
 catch an accidental drift on the next run.
 
 
-### Private check summaries (unreleased addition)
+### Check records (`checks`)
 
 `checks` is optional and has at most 128 entries. Each entry contains a shared
 contact `pubkey`, `method` (`words`, `in-person`, `nip05`, `app-attested`) and
@@ -417,13 +480,13 @@ relying app. The parser drops malformed entries and allowlists those three
 fields. Sources, evidence, identity-list membership and exchange transcripts
 remain private. Checks do not change relationship tier or inherit between lists.
 
-The new `signet.contacts.read:check-records` capability requires explicit consent
-and directory access. Existing `signet.contacts.read:checks` grants continue to
-share only the previous verification summaries. Reconnect for the new permission;
-older producers reject the unknown capability. Existing frozen vectors are
-unchanged.
+`signet.contacts.read:check-records` requires explicit consent and directory
+access. A `signet.contacts.read:checks` grant shares only the verification
+summaries on identities and methods, never `checks`. Reaching `checks` from an
+existing grant is broader sharing and needs a fresh pairing (§10); older
+producers reject the unknown capability. The frozen vectors carry no `checks`.
 
-## App introductions (draft, owner identities)
+## App introductions (v1, owner identities)
 
 - `signet.contacts.invites:create`: Issue named contact invites for the paired identity; eligible single-use requests may be accepted automatically for five minutes.
 - `signet.contacts.invites:receive`: Hand over a contact invite and send a request from the paired identity; no connection result is returned.
@@ -435,11 +498,11 @@ Use `createAppInviteClient({ signer, relay })` with `requestInvite(pairing)` or
 all client instances. The RelayIo contract authenticates signatures; the bundled
 nostr-tools adapter uses its verifying relay pool.
 
-Requests use kind 30078, app → rail NIP-44, with exactly one `d` tag
-`signet:contacts:app-invite:<grantId>`. JSON fields: v=1, grantId, requestId (32 hex),
+Requests use kind 30078, app → rail NIP-44, with exactly one **readable** `d`
+tag `signet:contacts:app-invite:<grantId>` (see §0 for what that exposes). JSON fields: v=1, grantId, requestId (32 hex),
 createdAt (seconds), action (`create-invite` with mode `single-use`/`standing`, or
 `receive-invite` with invite). Lifetime is 300 seconds; future clocks are rejected.
-Replies use kind 30078, rail → app NIP-44, tag
+Replies use kind 30078, rail → app NIP-44, readable tag
 `signet:contacts:app-invite:<grantId>:<requestId>`, and echo v/grantId/requestId.
 They carry createdAt plus `issued` with invite or `queued` without invite.
 No completion, other-contact existence, check, or private attribution is returned.
@@ -448,3 +511,35 @@ App revocation disables its invitations. Automatic acceptance requires a current
 explicit grant, its enabled per-app switch, the first single-use arrival, and the
 five-minute window. Standing invites never auto-accept. Identity signer refusal
 is retained for manual retry, not repeatedly prompted in the background.
+
+## 10. Consent and grant changes
+
+A grant is the owner's approval of one pairing ack: one `grantId`, one
+directory, one `grantedCapabilities` set, one `maxStalenessSeconds`.
+
+- **Ordinary updates keep the existing approval.** Republishing a projection as
+  contacts are added, edited, blocked or removed; a keepalive republish; a
+  projection whose `scopes` are narrower than the grant; an applied proposal;
+  an app-label rename; a revocation. None of these asks the owner again.
+- **Anything wider needs fresh consent — a new pairing, never an update.** A
+  capability not in `grantedCapabilities`; a different or wider directory; a
+  longer staleness window; a field class no granted capability unlocks (§6).
+  A producer must not deliver any of these on an existing grant, and a
+  consumer must not accept them as one.
+
+What this package enforces on the consumer side:
+
+- a projection whose `scopes` exceed the grant's `grantedCapabilities` is
+  refused whole;
+- a projection whose `expiresAt − issuedAt` exceeds the grant's
+  `maxStalenessSeconds` is refused whole;
+- an ack granting a capability the app did not request is refused, when the
+  app passes `requestedCapabilities` to `awaitPairingAck`;
+- `propose`, `requestInvite` and `handOverInvite` refuse locally unless the
+  matching capability was granted.
+
+What it does not enforce, and the producer must: the directory (it is chosen
+at pairing and is not carried on the ack or the projection), and field-level
+gating. `parseProjection` keeps any well-formed field whatever the projection's
+`scopes` say, because legacy full snapshots still parse (§6). The producer's
+projection builder is the allowlist that decides which fields a grant receives.

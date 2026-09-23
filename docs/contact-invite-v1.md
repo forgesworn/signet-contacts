@@ -1,9 +1,10 @@
-# Contact invite/exchange v1 — unreleased draft
+# Contact invite/exchange v1
 
-These additions implement contacts spec §§4–5. They need protocol review before
-release; existing v2 app-sharing vectors are unchanged. The new public fixture is
-`vectors/contact-invite-v1.json`. No compatibility with an already-deployed invite
-protocol is claimed.
+Status: **final** for the first release. This profile implements contacts spec
+§§4–5. Its messages are versioned `v: 1` independently of the v2 app-access rail
+(see the version table in `WIRE.md` §0); its frozen fixture is
+`vectors/contact-invite-v1.json`. No compatibility with any other invite protocol
+is claimed, and a message with any other `v` is rejected.
 
 ## Invite and mailbox
 
@@ -47,7 +48,7 @@ signature verification and recipient checks are mandatory before state changes.
 ## Encrypted transport
 
 A standard NIP-59 wrap addressed to a shared mailbox exposes the identity seal's
-pubkey to every invite holder. This draft deliberately uses an additional layer:
+pubkey to every invite holder. This profile deliberately uses an additional layer:
 
 1. Identity signs kind-13 seal with empty tags and canonical message JSON content.
 2. Fresh ephemeral key encrypts the entire signed seal to the real recipient
@@ -63,10 +64,11 @@ Outer opening is local-only. Identity opening performs one identity-key decrypt
 and occurs only on explicit inbox access. Sending/accepting uses one identity
 signature; encryption keys are ephemeral and immediately wiped.
 
-Draft bounds: 8192-byte message, 20000-character packet/ciphertext, 32000-character
+Bounds: 8192-byte message, 20000-character packet/ciphertext, 32000-character
 outer ciphertext; 32 identity decrypts per unlock, 128 pending per invite, 8 per
 sender after opening. Automatic app-introduction acceptance window is 300 seconds.
-Limits are provisional until review; the app must enforce counters and policies.
+The parsers and the bundled adapter enforce the size bounds; the app must enforce
+the counters and policies.
 
 Invites and pending nonce/reply-mailbox state belong in the private contacts
 vault. Subscribe through separate connections per identity. Decline/revoke sends

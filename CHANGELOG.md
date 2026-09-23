@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- **Contract (docs only; no wire bytes, versions or tag derivations changed).**
+  The capability-scoped v2 contract is frozen. `docs/WIRE.md` gains a per-message
+  version table (§0): the app-access rail (pairing, ack, envelope, projection)
+  is `v: 2`; proposal batches, app-introduction requests/replies and contact
+  invites/exchange messages are `v: 1`. It replaces the earlier claims that every
+  payload is `v: 2` and every routing tag is hashed — the app-introduction `d`
+  tags are readable and carry the `grantId`, and the ack and contact-exchange
+  events carry readable `p` tags. Adds an **Unsupported readers** statement
+  (Kenspeckle v1, bare-NIP-44 readers, pre-contract SDK builds, older producers,
+  any other `v`), the `checks[]` and `avatar.key` rows in the contact shape table,
+  and the consent rule (§10): ordinary updates keep an existing approval; an
+  extra capability, a wider directory, a longer staleness window or a new field
+  class needs a fresh pairing. Contact invites and app introductions are marked
+  final; the channel-check profile stays a draft outside the contract.
 - Clarify identity-scoped grants and owner confirmation for cross-identity app
   proposals in consent copy and wire documentation; wire shape is unchanged.
 - Document opaque, grant-local publication metadata for scoped projections.
@@ -89,7 +103,7 @@ comments carried stays. British spelling throughout ("zeroised"). WIRE.md now
 documents the web and Android App Link pairing carriers alongside the
 `signet-grant:` scheme.
 
-## 2026-09-18 — draft app introductions
+## 2026-09-18 — app introductions
 
 - Add explicit invite issuance and delivery capabilities, separate from contact
   list access, plus bounded app-to-rail requests and issuance/queueing replies.
@@ -97,4 +111,4 @@ documents the web and Android App Link pairing carriers alongside the
   completion status, check result or private invite attribution is returned.
 - Producer policy permits five-minute first-request automatic acceptance only
   for eligible single-use app invites, with a per-app opt-out and grant revocation.
-  Family/bot producer routing remains separate work; this draft is not released.
+  Family/bot producer routing remains separate work.

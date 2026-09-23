@@ -3,8 +3,10 @@
  *
  * The pairing scheme and the 21237 ack kind are REUSED from the shipped v1
  * companion rail so signet-app's existing QR route extends rather than forks.
- * The version marker `v=2` in the URI and `"v": 2` in every payload is what
- * separates the two; a v1 consumer's bytes are unchanged.
+ * The version marker `v=2` in the URI and `"v": 2` in the ack, envelope and
+ * projection is what separates the two; a v1 consumer's bytes are unchanged.
+ * Other message kinds carry their own version (proposals and invites are
+ * `v: 1`) — see the table in docs/WIRE.md §0.
  */
 
 export const PAIRING_SCHEME = 'signet-grant:';

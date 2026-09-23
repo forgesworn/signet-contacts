@@ -1,4 +1,4 @@
-/** Draft app-introduction transport. Each grant has one outstanding request slot.
+/** App-introduction transport (v1; see docs/WIRE.md §0). The `d` tags are readable. Each grant has one outstanding request slot.
  * Payloads are NIP-44 encrypted between the app key and its random grant rail.
  * Replies acknowledge issuance/queueing only, never connection completion. */
 import { isHex } from './ids.js';

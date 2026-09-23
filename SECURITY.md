@@ -24,9 +24,12 @@ this wire cannot promise no matter how it is implemented.
   and padded into a fixed bucket; the event carries no `#p` tag, so neither
   the recipient nor the directory's real size is visible to anyone reading the
   relay.
-- Routing tags (`projectionTag`, `proposalTag`, `scopedContactId`) are opaque
-  SHA-256 digests — knowing the rail's npub is a prerequisite to finding
-  anything to read at all.
+- The rail's routing tags (`projectionTag`, `proposalTag`, `scopedContactId`)
+  are opaque SHA-256 digests — knowing the rail's npub is a prerequisite to
+  finding anything to read at all. The app-introduction `d` tags are the
+  exception: they are readable and carry the `grantId`, so an observer who sees
+  one can compute that grant's `projectionTag` and link the two slots (payloads
+  stay encrypted). See the version table in `docs/WIRE.md` §0.
 - A projection excludes ECDH secrets, private notes, raw vouches/ceilings/blocks
   and every other directory **by construction** — the wire's own types have no
   field for them, not merely "the current builder happens not to fill them in".
