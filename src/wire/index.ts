@@ -13,3 +13,4 @@ export * from './contact-exchange-state.js';
 export * from './check-menu.js';
 export * from './app-invite.js';
 export * from './channel-check.js';
+export * from './coverage.js';

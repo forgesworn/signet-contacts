@@ -93,29 +93,40 @@ describe('vectors', () => {
   });
 
   it('freezes a full projection, a blocks-only projection and a revocation', () => {
+    // Every case carries ONLY fields its own scopes cover (WIRE.md §10): the
+    // builder throws otherwise and the parser refuses the projection.
     const full: ContactProjectionV2 = {
       v: 2, grantId: GRANT,
-      scopes: ['signet.contacts.read:directory', 'signet.contacts.read:roles', 'signet.contacts.blocks.read'],
+      scopes: [
+        'signet.contacts.read:directory', 'signet.contacts.read:method:email', 'signet.contacts.read:tier',
+        'signet.contacts.read:checks', 'signet.contacts.read:check-records', 'signet.contacts.read:roles',
+        'signet.contacts.blocks.read',
+      ],
       frontier: { maxClock: 42, opCount: 137, publishedAt: NOW, deviceId: DEVICE }, issuedAt: NOW, expiresAt: NOW + 21600,
       contacts: [
         {
-          contactId: scopedContactId(GRANT, 'contact-ada'), type: 'person',
+          contactId: scopedContactId(GRANT, 'contact-ada'),
           identities: [{ pubkey: 'c'.repeat(64), verification: 'proven' }],
           displayName: 'Ada', effectiveTier: 'kith', tierSource: 'direct',
-          roles: ['coach'], blocked: false,
+          roles: ['coach'],
+          contactMethods: [{ kind: 'email', value: 'ada@example.com', verification: 'proven' }],
+          blocked: false,
+          checks: [{ pubkey: 'c'.repeat(64), method: 'words', checkedAt: NOW * 1000 }],
         },
         {
-          contactId: scopedContactId(GRANT, 'contact-mallory'), type: 'person',
+          contactId: scopedContactId(GRANT, 'contact-mallory'),
           identities: [{ pubkey: 'd'.repeat(64), verification: 'proven' }],
           effectiveTier: 'none', tierSource: 'guardian-limited',
-          blocked: true, linkedPubkeys: ['e'.repeat(64)],
+          blocked: true,
         },
       ],
     };
+    // A blocks-only grant is a filter list: a blocked contact and its
+    // identity pubkeys, nothing else.
     const blocksOnly: ContactProjectionV2 = {
       ...full,
       scopes: ['signet.contacts.blocks.read'],
-      contacts: [full.contacts[1]!],
+      contacts: [{ contactId: scopedContactId(GRANT, 'contact-mallory'), identities: [{ pubkey: 'd'.repeat(64) }], blocked: true }],
     };
     const revocation: ContactProjectionV2 = { ...full, contacts: [], revoked: true };
     // R-5: a producer that had to drop contacts to fit says so on the wire.
@@ -125,9 +136,32 @@ describe('vectors', () => {
       expect(parseProjection(buildProjection(p))).toEqual(p);
     }
 
+    // Each is a well-formed projection that carries one field its scopes do
+    // not cover. A parser must refuse the WHOLE projection, not drop the field.
+    const body = (scopes: string[], contact: Record<string, unknown>): string => JSON.stringify({
+      v: 2, grantId: GRANT, scopes,
+      frontier: { maxClock: 1, opCount: 1, publishedAt: 1, deviceId: DEVICE }, issuedAt: 1, expiresAt: 2,
+      contacts: [{ contactId: scopedContactId(GRANT, 'contact-ada'), ...contact }],
+    });
+    const uncovered = [
+      { reason: 'effectiveTier without signet.contacts.read:tier',
+        plaintext: body(['signet.contacts.read:directory'], { displayName: 'Ada', effectiveTier: 'kith' }) },
+      { reason: 'identity verification without signet.contacts.read:checks',
+        plaintext: body(['signet.contacts.read:directory'], { identities: [{ pubkey: 'c'.repeat(64), verification: 'proven' }] }) },
+      { reason: 'a phone method under an email-only grant',
+        plaintext: body(['signet.contacts.read:directory', 'signet.contacts.read:method:email'], { contactMethods: [{ kind: 'phone', value: '+441234567890' }] }) },
+      { reason: 'checks under signet.contacts.read:checks, not read:check-records',
+        plaintext: body(['signet.contacts.read:directory', 'signet.contacts.read:checks'], { checks: [{ pubkey: 'c'.repeat(64), method: 'words', checkedAt: 1 }] }) },
+      { reason: 'an unblocked contact under signet.contacts.blocks.read alone',
+        plaintext: body(['signet.contacts.blocks.read'], { blocked: false }) },
+      { reason: 'an avatar, which no capability covers',
+        plaintext: body(['signet.contacts.read:directory'], { avatar: { url: 'https://x.example/a', hash: 'c'.repeat(64) } }) },
+    ];
+    for (const u of uncovered) expect(parseProjection(u.plaintext), u.reason).toBeNull();
+
     frozen('vectors/projection.v2.json', {
-      description: 'ContactProjectionV2 at full scope, at blocks-only scope, truncated, and as a revocation',
-      regenerated: '2026-09-16: ownerPubkey removed (R-31). The directory owner\'s persona pubkey is no longer on this wire — it was stable across every grant on a directory (a one-line join for two colluding apps) and, on a dependant directory, a minor\'s long-lived public identity. This is the one authorised regeneration of this vector; signet-app regenerates its own parity fixtures to match.',
+      description: 'ContactProjectionV2 at full scope, at blocks-only scope, truncated, and as a revocation; plus projections carrying a field their scopes do not cover, which a parser must refuse whole',
+      regenerated: '2026-09-23: pre-release contract freeze (WIRE.md §10). Every case now carries only fields its scopes cover, because both the builder and the parser now enforce field coverage; the full case gains the scopes it needs and drops type and linkedPubkeys, which no capability covers; the uncovered cases are new. Earlier: 2026-09-16, ownerPubkey removed (R-31). The package has never been published; signet-app regenerates its own parity fixtures to match.',
       full: { plaintext: buildProjection(full), parsed: full },
       blocksOnly: { plaintext: buildProjection(blocksOnly), parsed: blocksOnly },
       revocation: { plaintext: buildProjection(revocation), parsed: revocation },
@@ -141,6 +175,7 @@ describe('vectors', () => {
         '{"v":2,"grantId":"' + GRANT + '","ownerPubkey":"' + '1'.repeat(64) + '","scopes":[],"frontier":{"maxClock":1,"opCount":1,"publishedAt":1,"deviceId":"' + DEVICE + '"},"issuedAt":1,"expiresAt":2,"contacts":[]}',
         '[]',
       ],
+      uncovered,
     });
   });
 

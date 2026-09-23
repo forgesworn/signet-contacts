@@ -51,7 +51,7 @@ export interface ProjectedContact {
   /** Method/date only, with explicit read:check-records consent. No private source or evidence. */
   checks?: ProjectedCheck[];
   contactId: string;                 // grant-scoped opaque, 32 lowercase hex
-  /** Legacy optional metadata; current producers omit it. */
+  /** Legacy. No capability covers it, so a projection carrying it is refused (coverage.ts). */
   type?: ProjectedType;
   identities?: ProjectedIdentity[];
   displayName?: string;
@@ -63,7 +63,7 @@ export interface ProjectedContact {
   contactMethods?: ProjectedMethod[];
   /** Present only with blocks.read. Absence says nothing about block state. */
   blocked?: boolean;
-  /** Legacy read compatibility only; current producers never disclose links. */
+  /** Legacy. No capability covers it, so a projection carrying it is refused (coverage.ts). */
   linkedPubkeys?: string[];
 }
 /** C13: a projection is a SNAPSHOT, so the frontier says who published it and

@@ -27,6 +27,7 @@ import type {
   ProjectedTierSource, ProjectedType, ProjectedVerification, UnsignedNostrEvent,
 } from './types.js';
 import { isHex, projectionTag, sanitizeWireText } from './ids.js';
+import { uncoveredContactFields } from './coverage.js';
 
 const TIERS: readonly ProjectedTier[] = ['kin', 'kith', 'ken', 'none'];
 const TIER_SOURCES: readonly ProjectedTierSource[] = ['direct', 'guardian-vouched', 'guardian-limited'];
@@ -77,9 +78,13 @@ function parseAvatar(raw: unknown): ProjectedAvatar | undefined {
 }
 
 /** Parse one contact. Returns null when the contact cannot be trusted at all;
- *  an individually unparseable OPTIONAL field is dropped, not fatal. */
-export function parseProjectedContact(raw: unknown): ProjectedContact | null {
+ *  an individually unparseable OPTIONAL field is dropped, not fatal. When
+ *  `scopes` is given, a contact carrying a field those scopes do not cover
+ *  (`FIELD_COVERAGE`) is also null — `parseProjection` goes further and
+ *  refuses the whole projection. */
+export function parseProjectedContact(raw: unknown, scopes?: Iterable<string>): ProjectedContact | null {
   if (typeof raw !== 'object' || raw === null) return null;
+  if (scopes !== undefined && uncoveredContactFields(raw, scopes).length > 0) return null;
   const o = raw as Record<string, unknown>;
   if (!isHex(o.contactId, 32)) return null;
   if (o.type !== undefined && (typeof o.type !== 'string' || !TYPES.includes(o.type as ProjectedType))) return null;
@@ -180,9 +185,13 @@ export function parseProjection(json: string): ContactProjectionV2 | null {
   // made. Without this a consumer handed an over-sent projection kept the
   // first 2000 contacts and had nothing to tell it the list was short.
   const parserCapped = o.contacts.length > MAX_CONTACTS_PER_PROJECTION;
-  const contacts = o.contacts
-    .slice(0, MAX_CONTACTS_PER_PROJECTION)
-    .map(parseProjectedContact)
+  const delivered = o.contacts.slice(0, MAX_CONTACTS_PER_PROJECTION);
+  // Consent (WIRE.md §10): a field the projection's own scopes do not cover
+  // is broader sharing than the owner approved. That is not one bad item to
+  // drop — it is a producer out of contract, so the whole projection goes.
+  if (delivered.some((c) => uncoveredContactFields(c, scopes).length > 0)) return null;
+  const contacts = delivered
+    .map((c) => parseProjectedContact(c))
     .filter((c): c is ProjectedContact => c !== null)
     .filter((c) => {
       if (seenContactIds.has(c.contactId)) return false;
@@ -273,6 +282,16 @@ function bodyOf(p: ContactProjectionV2, scopes: readonly Capability[], contacts:
  * reparsed object can only ever contain fields the parser itself put there.
  */
 export function buildProjection(projection: ContactProjectionV2): string {
+  // Consent (WIRE.md §10): refuse, loudly, to emit any field the scopes do not
+  // cover. Checked against the caller's raw scopes and contacts, before any
+  // canonicalisation, so the error names the field rather than surfacing as
+  // "not parseable".
+  for (const contact of projection.contacts) {
+    const uncovered = uncoveredContactFields(JSON.parse(JSON.stringify(contact)) as unknown, projection.scopes);
+    if (uncovered.length > 0) {
+      throw new TypeError(`signet-contacts: projection carries fields its scopes do not cover: ${uncovered.join(', ')}`);
+    }
+  }
   const draftJson = JSON.stringify(bodyOf(projection, projection.scopes, projection.contacts));
 
   const reparsed = parseProjection(draftJson);

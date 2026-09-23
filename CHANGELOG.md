@@ -16,6 +16,16 @@
   extra capability, a wider directory, a longer staleness window or a new field
   class needs a fresh pairing. Contact invites and app introductions are marked
   final; the channel-check profile stays a draft outside the contract.
+- **Breaking (wire, pre-release): field coverage is enforced on both sides.**
+  One table, `FIELD_COVERAGE` (`src/wire/coverage.ts`), maps each projected-contact
+  field to the capabilities it needs. `buildProjection` throws on a contact
+  carrying a field its `scopes` do not cover, and `parseProjection` refuses such a
+  projection whole (`parseProjectedContact` takes optional `scopes` to do the same
+  per contact). `avatar`, `type` and `linkedPubkeys` are covered by no capability,
+  so a projection carrying them is now refused; legacy full snapshots no longer
+  parse. `vectors/projection.v2.json` is regenerated for the contract freeze:
+  every case carries only covered fields, the full case gains the scopes it
+  needs, and a new `uncovered` list holds projections a parser must refuse.
 - Clarify identity-scoped grants and owner confirmation for cross-identity app
   proposals in consent copy and wire documentation; wire shape is unchanged.
 - Document opaque, grant-local publication metadata for scoped projections.
@@ -24,7 +34,8 @@
   postal-address and other-method capabilities; legacy broad grants do not expand.
 - Default directory access contains names and public keys only. Tiers and
   verification status need their own capabilities; omitted fields stay unknown.
-- Retain parsing of legacy full snapshots while supporting minimal projections.
+- Support minimal projections. (Legacy full snapshots were parsed for a while;
+  field coverage, below, now refuses them.)
 
 
 This package has no published releases yet; consumers install it pinned to a

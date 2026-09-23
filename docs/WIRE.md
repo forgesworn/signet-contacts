@@ -55,6 +55,10 @@ None of the following is supported, and none of them fails open:
   know, so they believe the grant is narrower than the owner approved; they
   never see `checks`; and one that requires tier or check fields may reject a
   current, smaller snapshot. Update the SDK, then pair again.
+- **Producers of legacy full snapshots** — ones that send `type`,
+  `linkedPubkeys`, `avatar`, or tier and verification fields without the
+  capabilities that cover them. The consumer refuses the whole projection
+  (§10), so the app sees no update rather than more than was granted.
 - **Older producers.** A producer that does not know a capability token rejects
   a pairing request carrying it, so `awaitPairingAck` returns `null`, the same
   as a timeout or a refusal.
@@ -243,11 +247,11 @@ default `21600` when absent or invalid) by `clampStaleness`.
 | Field | Type | Limit |
 |---|---|---|
 | `contactId` | 32-hex, grant-scoped opaque id | — |
-| `type` (legacy, optional) | `'person' \| 'organisation'` | — |
+| `type` (legacy) | `'person' \| 'organisation'` | no capability covers it: a projection carrying it is refused |
 | `identities[].pubkey` | 64-hex | ≤ 16 per contact (`MAX_IDENTITIES_PER_CONTACT`) |
 | `identities[].verification` (optional) | `'unverified' \| 'proven' \| 'mutual'` | — |
 | `displayName` | sanitised string | ≤ 100 chars (`MAX_DISPLAY_NAME`) |
-| `avatar.url` | `https://` only | ≤ 512 chars (`MAX_URL_LEN`) |
+| `avatar.url` | `https://` only; no capability covers `avatar` yet, so a projection carrying it is refused | ≤ 512 chars (`MAX_URL_LEN`) |
 | `avatar.hash` | 64-hex | — |
 | `avatar.key` (optional) | 64-hex | — |
 | `effectiveTier` (optional) | `'kin' \| 'kith' \| 'ken' \| 'none'` | — |
@@ -261,7 +265,7 @@ default `21600` when absent or invalid) by `clampStaleness`.
 | `checks[].pubkey` | 64-hex (producers list only keys already shared on this contact) | — |
 | `checks[].method` | `'words' \| 'in-person' \| 'nip05' \| 'app-attested'` | — |
 | `checks[].checkedAt` | non-negative safe integer, **Unix milliseconds** | — |
-| `linkedPubkeys` (legacy, optional) | `string[]` of 64-hex | ≤ 16 items (`MAX_LINKED_PUBKEYS`) |
+| `linkedPubkeys` (legacy) | `string[]` of 64-hex; no capability covers it: a projection carrying it is refused | ≤ 16 items (`MAX_LINKED_PUBKEYS`) |
 
 There is **no owner pubkey on this wire** (R-31). A connected app learns the
 grant's rail pubkey and a set of grant-scoped opaque contact ids, and nothing
@@ -353,8 +357,8 @@ Notes, private evidence and private identity links are never projected.
 method capabilities. Unknown tokens are dropped; reconnect with explicit method
 requests to restore access. Existing directory grants receive less data: tiers,
 checks and block state are optional and require their named capabilities.
-`type` and `linkedPubkeys` remain readable for legacy snapshots but are no longer
-emitted by My Signet. Old SDKs requiring tier/check fields may reject the smaller
+`type` and `linkedPubkeys` are no longer on this wire: no capability covers
+them, so a projection carrying either is refused (§10). Old SDKs requiring tier/check fields may reject the smaller
 snapshot; update the SDK before reconnecting. This is a change before the first
 SDK release, not a compatibility promise for published consumers.
 
@@ -376,8 +380,31 @@ Private links are not included, even in a blocks-only projection.
 There is deliberately no *read-avatar* capability in v2 (ruling R-12): a
 capability that grants a field the producer cannot yet fill is a promise the
 wire does not keep, so it waits until signet-app has an avatar map to project.
-The `ProjectedAvatar` shape and its parser already exist, so adding the
-capability later is additive, not a breaking change.
+The `ProjectedAvatar` shape and its parser already exist, but until that
+capability does, a projection carrying `avatar` is refused (§10). Adding it
+later is additive: a new capability, and a new pairing to consent to it.
+
+### Field coverage
+
+Which capabilities a projected-contact field needs is one table,
+`FIELD_COVERAGE` in `src/wire/coverage.ts`, read by both the builder and the
+parser. All listed capabilities are required:
+
+| Field | Requires |
+|---|---|
+| the contact itself, `identities` (pubkeys) | `read:directory`; **or**, on a contact with `blocked: true`, `blocks.read` |
+| `displayName`, `contactMethods` (the array) | `read:directory` |
+| `contactMethods[]` of kind *k* | `read:directory` + `read:method:`*k* |
+| `effectiveTier`, `tierSource` | `read:directory` + `read:tier` |
+| `identities[].verification`, `contactMethods[].verification` | `read:directory` + `read:checks` |
+| `checks` | `read:directory` + `read:check-records` |
+| `roles` | `read:directory` + `read:roles` |
+| `blocked` | `blocks.read` |
+| `avatar`, `type`, `linkedPubkeys` | nothing covers them — always refused |
+
+A field is judged by its presence on the wire, not by whether it would parse.
+Keys that are not wire fields at all (private notes, secrets) are simply
+dropped by the parser, as before.
 
 ## 7. Error-handling contract
 
@@ -389,9 +416,14 @@ capability later is additive, not a breaking change.
   inside an otherwise good `contacts` array is dropped by
   `parseProjectedContact`; the projection as a whole is not rejected for it.
   The same applies to one malformed proposal inside a batch.
+- **Uncovered field → refuse the whole projection.** A contact carrying a
+  field the projection's `scopes` do not cover (§6, Field coverage) is not a
+  malformed item: it is a producer out of contract, so `parseProjection`
+  returns `null` for the whole projection.
 - **Builders throw.** `buildProjection` and `buildProposalBatch` are strict:
   they re-parse their own output and throw a `TypeError` if anything would be
-  dropped, capped or rewritten in transit, or if the sealed body would exceed
+  dropped, capped or rewritten in transit, if a contact carries a field the
+  scopes do not cover, or if the sealed body would exceed
   `MAX_WIRE_BYTES`. A producer is expected to have fitted the body first
   (`projectionByteLength`); reaching the throw means it did not.
 
@@ -450,10 +482,13 @@ Frozen, byte-exact test vectors live in `vectors/`, generated by
 `src/wire/vectors.test.ts`:
 
 - `vectors/pairing.v2.json` — a built pairing URI and its parse.
-- `vectors/projection.v2.json` — a built projection body and its parse.
-  Regenerated once, on 2026-09-16, to drop `ownerPubkey` (R-31); its
-  `regenerated` field records the reason, and signet-app regenerates its own
-  parity fixtures to match.
+- `vectors/projection.v2.json` — a built projection body and its parse, plus
+  `uncovered`: projections carrying a field their scopes do not cover, each of
+  which a parser must refuse whole. Regenerated on 2026-09-16 to drop
+  `ownerPubkey` (R-31), and on 2026-09-23 for the pre-release contract freeze
+  (every case now carries only fields its scopes cover); its `regenerated`
+  field records both reasons, and signet-app regenerates its own parity
+  fixtures to match.
 - `vectors/proposal.v1.json` — a built proposal batch and its parse.
 - `vectors/sanitise.json` — the `sanitizeWireText` behaviour both this SDK and
   signet-app assert against (R-6 parity).
@@ -527,8 +562,12 @@ directory, one `grantedCapabilities` set, one `maxStalenessSeconds`.
   A producer must not deliver any of these on an existing grant, and a
   consumer must not accept them as one.
 
-What this package enforces on the consumer side:
+What this package enforces:
 
+- **field coverage, on both sides**: `buildProjection` throws on a contact
+  carrying a field its `scopes` do not cover, and `parseProjection` refuses
+  such a projection whole — one shared table (§6, Field coverage), so producer
+  and consumer cannot disagree about what a capability unlocks;
 - a projection whose `scopes` exceed the grant's `grantedCapabilities` is
   refused whole;
 - a projection whose `expiresAt − issuedAt` exceeds the grant's
@@ -538,8 +577,8 @@ What this package enforces on the consumer side:
 - `propose`, `requestInvite` and `handOverInvite` refuse locally unless the
   matching capability was granted.
 
-What it does not enforce, and the producer must: the directory (it is chosen
-at pairing and is not carried on the ack or the projection), and field-level
-gating. `parseProjection` keeps any well-formed field whatever the projection's
-`scopes` say, because legacy full snapshots still parse (§6). The producer's
-projection builder is the allowlist that decides which fields a grant receives.
+What it cannot enforce, and the producer must: the directory. It is chosen at
+pairing and is not carried on the ack or the projection. The producer's
+projection builder is also still the allowlist that decides which contacts and
+values a grant receives; the coverage check only guarantees it never ships a
+field class the grant does not cover.

@@ -76,9 +76,9 @@ function projection(over: Partial<ContactProjectionV2> = {}): ContactProjectionV
     frontier: { maxClock: 5, opCount: 10, publishedAt: 1_700_000_000, deviceId: '2'.repeat(32) },
     issuedAt: 1_700_000_000, expiresAt: 1_700_021_600,
     contacts: [{
-      contactId: 'c'.repeat(32), type: 'person', blocked: false,
-      identities: [{ pubkey: 'd'.repeat(64), verification: 'proven' }],
-      effectiveTier: 'kith', tierSource: 'direct',
+      // Only fields `read:directory` covers (WIRE.md §10).
+      contactId: 'c'.repeat(32), displayName: 'Dee',
+      identities: [{ pubkey: 'd'.repeat(64) }],
     }],
     ...over,
   };
