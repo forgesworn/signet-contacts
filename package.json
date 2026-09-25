@@ -80,6 +80,9 @@
     "type": "git",
     "url": "git+https://github.com/forgesworn/signet-contacts.git"
   },
+  "publishConfig": {
+    "provenance": true
+  },
   "homepage": "https://github.com/forgesworn/signet-contacts#readme",
   "bugs": {
     "url": "https://github.com/forgesworn/signet-contacts/issues"
