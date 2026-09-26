@@ -73,10 +73,17 @@ if (pairing === null) {
 
 **Before doing anything else with `pairing`** — before saving it, fetching a
 projection, or sending a proposal — show the pairing verification code and
-have the person confirm it against the same code Signet shows (B1). A QR is
-photographable, and `awaitPairingAck` has no author pin, so an attacker who
-publishes a forged ack before the owner's real one lands otherwise pairs the
-app to their own rail with nothing on screen to say so:
+wait for the person to confirm it with Signet (B1, F1). A QR is photographable,
+and `awaitPairingAck` has no author pin, so an attacker who publishes a forged
+ack before the owner's real one lands otherwise pairs the app to their own
+rail with nothing on screen to say so.
+
+The code flows ONE way: your app shows it; the person types it INTO Signet;
+Signet computes its own copy and compares. Your app never shows Signet's code
+back — there isn't one to show, and showing your own code on Signet's screen
+too would let a losing attacker read the owner's code there and forge a
+second ack to match it. Your "Continue" only fires once the person has done
+that and Signet has told them it matched:
 
 ```ts
 import { pairingCode, formatPairingCode } from '@forgesworn/signet-contacts/wire';
@@ -87,9 +94,12 @@ const code = pairingCode({
   grantId: pairing.grantId,
   railPubkey: pairing.railPubkey,
 });
-const confirmed = await showPairingCodeAndConfirm(formatPairingCode(code)); // "042 917"
+// Show `formatPairingCode(code)` ("042 917") and ask the person to type it
+// into Signet. Continue only fires once they say Signet confirmed it there.
+const confirmed = await showPairingCodeAndWaitForContinue(formatPairingCode(code));
 if (!confirmed) {
-  // codes did not match — discard this pairing and start again with a fresh challenge
+  // the person cancelled, or said Signet reported a mismatch — discard this
+  // pairing and start again with a fresh challenge
   return;
 }
 await savePairing(pairing); // your own persistence — plain JSON

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { pairingCode, formatPairingCode } from './pairing-code.js';
+import { pairingCode, formatPairingCode, matchesPairingCode } from './pairing-code.js';
 
 const APP = 'a'.repeat(64);
 const RAIL = 'b'.repeat(64);
@@ -74,5 +74,50 @@ describe('formatPairingCode', () => {
   it('groups the six digits as "NNN NNN"', () => {
     expect(formatPairingCode('042917')).toBe('042 917');
     expect(formatPairingCode('000000')).toBe('000 000');
+  });
+});
+
+describe('matchesPairingCode', () => {
+  const INPUT = { appPubkey: APP, challenge: CHALLENGE, grantId: GRANT, railPubkey: RAIL };
+  const code = pairingCode(INPUT);
+  const grouped = formatPairingCode(code);
+
+  it('matches the bare code typed back exactly', () => {
+    expect(matchesPairingCode(INPUT, code)).toBe(true);
+  });
+
+  it('matches with spaces stripped', () => {
+    expect(matchesPairingCode(INPUT, grouped)).toBe(true);
+  });
+
+  it('matches with a hyphen in place of the grouping space', () => {
+    expect(matchesPairingCode(INPUT, `${code.slice(0, 3)}-${code.slice(3)}`)).toBe(true);
+  });
+
+  it('rejects one digit short', () => {
+    expect(matchesPairingCode(INPUT, code.slice(0, 5))).toBe(false);
+  });
+
+  it('rejects one digit long', () => {
+    expect(matchesPairingCode(INPUT, `${code}9`)).toBe(false);
+  });
+
+  it('rejects non-digit characters left after stripping spaces/hyphens', () => {
+    expect(matchesPairingCode(INPUT, code.replace(/.$/, 'a'))).toBe(false);
+  });
+
+  it('rejects a well-formed but wrong code', () => {
+    const wrong = code === '000000' ? '000001' : '000000';
+    expect(matchesPairingCode(INPUT, wrong)).toBe(false);
+  });
+
+  it('never throws on a bad typed value — returns false instead', () => {
+    expect(matchesPairingCode(INPUT, '')).toBe(false);
+    expect(matchesPairingCode(INPUT, undefined as unknown as string)).toBe(false);
+    expect(matchesPairingCode(INPUT, null as unknown as string)).toBe(false);
+  });
+
+  it('still throws TypeError on an invalid input, same as pairingCode', () => {
+    expect(() => matchesPairingCode({ ...INPUT, appPubkey: 'short' }, code)).toThrow(TypeError);
   });
 });

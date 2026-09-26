@@ -87,9 +87,14 @@ this wire cannot promise no matter how it is implemented.
   app to the attacker's rail with nothing on screen to say so. The mitigation
   is `pairingCode(appPubkey, challenge, grantId, railPubkey)`
   (`src/wire/pairing-code.ts`): `grantId` and `railPubkey` exist only inside
-  the real ack, so the code an app must show and a person must confirm before
-  using the pairing differs between the real pairing and a forged one. The
-  attacker gets one guess, at 1-in-1,000,000 odds. See `docs/WIRE.md` §3.
+  the real ack, so the code differs between the real pairing and a forged one.
+  The code flows one way ONLY — the app shows it, the person types it into
+  Signet, Signet compares (`matchesPairingCode`) and never displays its own
+  (F1): if Signet also displayed a code, the attacker could read the owner's
+  off Signet's own screen and forge a second ack to match it after the fact.
+  With the code shown on one screen only, the attacker must commit to a forged
+  ack before anything about the owner's code exists to copy, so they get one
+  guess, at 1-in-1,000,000 odds. See `docs/WIRE.md` §3.
 - **S9 — the rendezvous relay is chosen by the app being paired.** The pairing
   URI names the relay the ack is published to, so approving a grant makes the
   owner's device dial a host the requesting app picked; it is validated for

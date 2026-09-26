@@ -2,20 +2,27 @@
 
 ## Unreleased
 
-- **Security (B1): pairing verification code against a photographed-QR
-  takeover.** `awaitPairingAck` has no author pin and accepts the first ack
-  that decrypts and echoes the challenge, so a forged ack published from the
-  QR's own `appPubkey`/`challenge` — before the owner's real ack lands — used
-  to pair the app to the attacker's rail with nothing on screen to say so.
-  New `pairingCode(appPubkey, challenge, grantId, railPubkey)` and
-  `formatPairingCode(code)` in `src/wire/pairing-code.ts` (exported from
-  `src/wire/index.ts` and the package root) build a 6-digit code from values
-  — `grantId`, `railPubkey` — that exist only inside the real ack, never
-  inside the photographed QR; `docs/WIRE.md` §3 states the consumer/producer
+- **Security (B1, F1): pairing verification code against a photographed-QR
+  takeover, shown ONE way only.** `awaitPairingAck` has no author pin and
+  accepts the first ack that decrypts and echoes the challenge, so a forged
+  ack published from the QR's own `appPubkey`/`challenge` — before the
+  owner's real ack lands — used to pair the app to the attacker's rail with
+  nothing on screen to say so. New `pairingCode(appPubkey, challenge,
+  grantId, railPubkey)` and `formatPairingCode(code)` in
+  `src/wire/pairing-code.ts` (exported from `src/wire/index.ts` and the
+  package root) build a 6-digit code from values — `grantId`, `railPubkey` —
+  that exist only inside the real ack, never inside the photographed QR. The
+  code flows one way: the consumer (app) shows it; the producer (Signet)
+  **never** displays its own — showing both would let an attacker whose
+  forged ack landed first read the owner's code off Signet's screen and
+  forge a second ack to match it after the fact. Signet instead asks the
+  person to type the code the app is showing and checks it itself with new
+  `matchesPairingCode(input, typed)`, which strips spaces/hyphens and never
+  throws on a bad `typed`. `docs/WIRE.md` §3 states the consumer/producer
   rules, `SECURITY.md` names the threat as B1, and `docs/INTEGRATION.md`'s
-  pairing walkthrough adds the confirm step before a pairing is used for
-  anything. `vectors/pairing-code.json` freezes four cases. No wire message,
-  ack, projection, or QR format changed.
+  pairing walkthrough shows the one-way confirm step before a pairing is used
+  for anything. `vectors/pairing-code.json` freezes four cases. No wire
+  message, ack, projection, or QR format changed.
 - **Fix (B2): proposal resend.** Proposals ride one replaceable event per
   grant, so a second `propose` call used to overwrite the first before Signet
   had read it, and the client never resent — a suggestion sent while Signet
