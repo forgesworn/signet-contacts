@@ -6,8 +6,8 @@ import { MAX_ENVELOPE_CHARS, sealVaultPayload } from './wire/envelope.js';
 import { buildProjection, projectionEventTemplate } from './wire/projection.js';
 import { parseProposalBatch } from './wire/proposal.js';
 import { projectionTag, proposalTag } from './wire/ids.js';
-import { ACK_CANDIDATE_LIMIT, PAIRING_FRESHNESS_SECONDS } from './wire/constants.js';
-import type { ContactProjectionV2, PairingV2, SignedNostrEvent } from './wire/types.js';
+import { ACK_CANDIDATE_LIMIT, MAX_PROPOSALS_PER_BATCH, MAX_STALENESS_SECONDS, PAIRING_FRESHNESS_SECONDS } from './wire/constants.js';
+import type { ContactProjectionV2, PairingV2, PendingProposal, SignedNostrEvent } from './wire/types.js';
 
 const GRANT = 'f'.repeat(32);
 const APP = 'a'.repeat(64);
@@ -831,6 +831,54 @@ describe('propose', () => {
     expect(batch?.proposals[0]?.grantId).toBe(GRANT);
   });
 
+  // F3: two drafts in one call for the same add-ken pubkey (case-insensitive)
+  // — only the LAST one's displayName should reach the batch.
+  it('dedupes two add-ken drafts in one call for the same pubkey (case-insensitive), keeping the last', async () => {
+    let captured: SignedNostrEvent | null = null;
+    const client = createSignetContactsClient({
+      signer: fakeSigner(),
+      relay: { fetchNewest: async () => null, publish: async (e) => { captured = e; return true; } },
+      now: () => 1_700_000_500,
+    });
+    const pubkey = 'c'.repeat(64);
+    const ok = await client.propose(ADD_KEN_PAIRING, [
+      { action: 'add-ken', value: { pubkey: pubkey.toUpperCase(), displayName: 'First' } },
+      { action: 'add-ken', value: { pubkey, displayName: 'Second' } },
+    ]);
+    expect(ok).toBe(true);
+    const inner = JSON.parse(captured!.content) as { to: string; plaintext: string };
+    const batch = parseProposalBatch(inner.plaintext)!;
+    expect(batch.proposals).toHaveLength(1);
+    expect((batch.proposals[0]!.value as { displayName: string }).displayName).toBe('Second');
+    expect(client.pendingProposals()).toHaveLength(1);
+  });
+
+  // F3: a rename must never lose LWW to its own sibling in the same batch.
+  it('dedupes two rename-app-label drafts in one call for the same contactId, keeping the last', async () => {
+    let captured: SignedNostrEvent | null = null;
+    const RENAME_PAIRING: PairingV2 = {
+      ...PAIRING,
+      grantedCapabilities: ['signet.contacts.read:directory', 'signet.contacts.propose:rename-app-label'],
+    };
+    const client = createSignetContactsClient({
+      signer: fakeSigner(),
+      relay: { fetchNewest: async () => null, publish: async (e) => { captured = e; return true; } },
+      now: () => 1_700_000_500,
+    });
+    const contactId = 'a'.repeat(32);
+    const ok = await client.propose(RENAME_PAIRING, [
+      { action: 'rename-app-label', value: { contactId, label: 'Old label', updatedAt: 1_700_000_000_000 } },
+      { action: 'rename-app-label', value: { contactId, label: 'New label', updatedAt: 1_700_000_600_000 } },
+    ]);
+    expect(ok).toBe(true);
+    const inner = JSON.parse(captured!.content) as { to: string; plaintext: string };
+    const batch = parseProposalBatch(inner.plaintext)!;
+    expect(batch.proposals).toHaveLength(1);
+    const value = batch.proposals[0]!.value as { label: string; updatedAt: number };
+    expect(value.label).toBe('New label');
+    expect(value.updatedAt).toBe(1_700_000_600_000);
+  });
+
   it('refuses a draft the grant does not cover, without touching the relay', async () => {
     const publish = vi.fn(async () => true);
     const client = createSignetContactsClient({
@@ -913,6 +961,354 @@ describe('propose', () => {
       { action: 'add-ken', value: { pubkey: 'c'.repeat(64), displayName: 'Ada' } },
     ])).resolves.toBe(false);
     expect(client.pendingProposals()).toEqual([]);
+  });
+});
+
+describe('propose — resend (B2)', () => {
+  const ADD_KEN_PAIRING: PairingV2 = {
+    ...PAIRING,
+    grantedCapabilities: ['signet.contacts.read:directory', 'signet.contacts.propose:add-ken'],
+  };
+
+  function plaintextOf(event: SignedNostrEvent): string {
+    return (JSON.parse(event.content) as { to: string; plaintext: string }).plaintext;
+  }
+
+  it('resends a still-pending proposal on the next call, byte-identical to the first send', async () => {
+    let clock = 1_700_000_500;
+    const captured: SignedNostrEvent[] = [];
+    const client = createSignetContactsClient({
+      signer: fakeSigner(),
+      relay: { fetchNewest: async () => null, publish: async (e) => { captured.push(e); return true; } },
+      now: () => clock,
+    });
+    await client.propose(ADD_KEN_PAIRING, [
+      { action: 'add-ken', value: { pubkey: 'c'.repeat(64), displayName: 'Ada' } },
+    ]);
+    const firstProposal = parseProposalBatch(plaintextOf(captured[0]!))!.proposals[0]!;
+
+    clock += 100; // a second call, later — the resent entry must keep the ORIGINAL createdAt
+    await client.propose(ADD_KEN_PAIRING, [
+      { action: 'add-ken', value: { pubkey: 'd'.repeat(64), displayName: 'Bo' } },
+    ]);
+    const secondBatch = parseProposalBatch(plaintextOf(captured[1]!))!;
+    expect(secondBatch.proposals).toHaveLength(2);
+    // New drafts come first.
+    expect((secondBatch.proposals[0]!.value as { pubkey: string }).pubkey).toBe('d'.repeat(64));
+    const resent = secondBatch.proposals[1]!;
+    expect(resent.operationId).toBe(firstProposal.operationId);
+    expect(resent.action).toBe(firstProposal.action);
+    expect(resent.value).toEqual(firstProposal.value);
+    expect(resent.createdAt).toBe(firstProposal.createdAt);
+    expect(resent.createdAt).toBe(1_700_000_500); // not the later clock
+  });
+
+  it('caps at MAX_PROPOSALS_PER_BATCH, new drafts first, resends newest-sentAt-first', async () => {
+    const storage = createMemoryStorage();
+    const baseSentAt = 1_700_000_000;
+    const rows: PendingProposal[] = [];
+    for (let i = 0; i < 60; i++) {
+      rows.push({
+        grantId: GRANT,
+        operationId: i.toString(16).padStart(32, '0'),
+        action: 'add-ken',
+        value: { pubkey: i.toString(16).padStart(64, '9'), displayName: `P${i}` },
+        sentAt: baseSentAt + i, // strictly increasing: row 59 is newest
+      });
+    }
+    await storage.set(`signet-contacts:pending:${GRANT}`, JSON.stringify(rows));
+
+    const captured: SignedNostrEvent[] = [];
+    const client = createSignetContactsClient({
+      signer: fakeSigner(), storage,
+      relay: { fetchNewest: async () => null, publish: async (e) => { captured.push(e); return true; } },
+      now: () => baseSentAt + 1000,
+    });
+    await client.load(GRANT);
+    const newDrafts = Array.from({ length: 5 }, (_, k) => ({
+      action: 'add-ken' as const,
+      value: { pubkey: `f${k}`.padStart(64, 'f'), displayName: `New${k}` },
+    }));
+    expect(await client.propose(ADD_KEN_PAIRING, newDrafts)).toBe(true);
+
+    const batch = parseProposalBatch(plaintextOf(captured[0]!))!;
+    expect(batch.proposals).toHaveLength(MAX_PROPOSALS_PER_BATCH);
+    const resent = batch.proposals.slice(newDrafts.length);
+    expect(resent).toHaveLength(MAX_PROPOSALS_PER_BATCH - newDrafts.length); // 45
+    const resentSentAts = resent.map((p) => p.createdAt);
+    expect(resentSentAts[0]).toBe(baseSentAt + 59); // newest first
+    expect(resentSentAts.at(-1)).toBe(baseSentAt + 15); // the 45 newest of 60, so 15..59
+    expect(resentSentAts).toEqual([...resentSentAts].sort((a, b) => b - a));
+    // The 15 oldest (rows 0..14) were pushed out of the batch, not dropped —
+    // they stay pending for a later call or reconcilePending to deal with.
+    expect(client.pendingProposals()).toHaveLength(65); // 60 original + 5 new
+  });
+
+  it('does not resend an add-ken superseded by a new draft for the same pubkey, and drops it only on success', async () => {
+    const storage = createMemoryStorage();
+    const pubkey = 'c'.repeat(64);
+    const oldRow: PendingProposal = {
+      grantId: GRANT, operationId: '1'.repeat(32), action: 'add-ken', value: { pubkey, displayName: 'Old name' }, sentAt: 1_700_000_000,
+    };
+    await storage.set(`signet-contacts:pending:${GRANT}`, JSON.stringify([oldRow]));
+
+    // A failed publish must leave the superseded row exactly where it was.
+    const failing = createSignetContactsClient({
+      signer: fakeSigner(), storage,
+      relay: { fetchNewest: async () => null, publish: async () => false },
+      now: () => 1_700_000_500,
+    });
+    await failing.load(GRANT);
+    expect(await failing.propose(ADD_KEN_PAIRING, [{ action: 'add-ken', value: { pubkey, displayName: 'New name' } }]))
+      .toBe(false);
+    expect(failing.pendingProposals()).toEqual([oldRow]);
+
+    // A successful publish drops it, and it must never have ridden along.
+    const captured: SignedNostrEvent[] = [];
+    const client = createSignetContactsClient({
+      signer: fakeSigner(), storage,
+      relay: { fetchNewest: async () => null, publish: async (e) => { captured.push(e); return true; } },
+      now: () => 1_700_000_500,
+    });
+    await client.load(GRANT);
+    expect(await client.propose(ADD_KEN_PAIRING, [{ action: 'add-ken', value: { pubkey, displayName: 'New name' } }]))
+      .toBe(true);
+    const batch = parseProposalBatch(plaintextOf(captured[0]!))!;
+    expect(batch.proposals).toHaveLength(1); // the superseded row never rode along
+    expect(client.pendingProposals().some((p) => p.operationId === oldRow.operationId)).toBe(false);
+  });
+
+  it('does not resend a rename-app-label superseded by a new draft for the same contactId', async () => {
+    const storage = createMemoryStorage();
+    const contactId = 'a'.repeat(32);
+    const oldRow: PendingProposal = {
+      grantId: GRANT, operationId: '6'.repeat(32), action: 'rename-app-label',
+      value: { contactId, label: 'Old label', updatedAt: 1_700_000_000_000 }, sentAt: 1_700_000_000,
+    };
+    await storage.set(`signet-contacts:pending:${GRANT}`, JSON.stringify([oldRow]));
+    const RENAME_PAIRING: PairingV2 = {
+      ...PAIRING, grantedCapabilities: ['signet.contacts.read:directory', 'signet.contacts.propose:rename-app-label'],
+    };
+    const captured: SignedNostrEvent[] = [];
+    const client = createSignetContactsClient({
+      signer: fakeSigner(), storage,
+      relay: { fetchNewest: async () => null, publish: async (e) => { captured.push(e); return true; } },
+      now: () => 1_700_000_500,
+    });
+    await client.load(GRANT);
+    expect(await client.propose(RENAME_PAIRING, [
+      { action: 'rename-app-label', value: { contactId, label: 'New label', updatedAt: 1_700_000_600_000 } },
+    ])).toBe(true);
+    const batch = parseProposalBatch(plaintextOf(captured[0]!))!;
+    expect(batch.proposals).toHaveLength(1);
+    expect(client.pendingProposals().some((p) => p.operationId === oldRow.operationId)).toBe(false);
+  });
+
+  it('does not resend a pending entry older than the wire’s staleness ceiling, even under a looser local window', async () => {
+    const storage = createMemoryStorage();
+    const staleRow: PendingProposal = {
+      grantId: GRANT, operationId: '2'.repeat(32), action: 'add-ken', value: { pubkey: 'c'.repeat(64), displayName: 'Stale' }, sentAt: 1_700_000_000,
+    };
+    await storage.set(`signet-contacts:pending:${GRANT}`, JSON.stringify([staleRow]));
+    const nowSec = 1_700_000_000 + MAX_STALENESS_SECONDS + 1;
+    const captured: SignedNostrEvent[] = [];
+    const client = createSignetContactsClient({
+      signer: fakeSigner(), storage,
+      relay: { fetchNewest: async () => null, publish: async (e) => { captured.push(e); return true; } },
+      now: () => nowSec,
+      maxPendingStalenessSeconds: MAX_STALENESS_SECONDS * 10, // looser than the wire's own ceiling
+    });
+    await client.load(GRANT);
+    expect(await client.propose(ADD_KEN_PAIRING, [{ action: 'add-ken', value: { pubkey: 'd'.repeat(64), displayName: 'New' } }]))
+      .toBe(true);
+    const batch = parseProposalBatch(plaintextOf(captured[0]!))!;
+    expect(batch.proposals).toHaveLength(1); // the stale row is excluded from the batch
+    // Not dropped either — only resend is refused; reconcilePending owns aging it out.
+    expect(client.pendingProposals().some((p) => p.operationId === staleRow.operationId)).toBe(true);
+  });
+
+  it('does not resend a pending entry whose capability the grant no longer covers', async () => {
+    const storage = createMemoryStorage();
+    const renameRow: PendingProposal = {
+      grantId: GRANT, operationId: '3'.repeat(32), action: 'rename-app-label',
+      value: { contactId: 'a'.repeat(32), label: 'Coach', updatedAt: 1_700_000_000_000 }, sentAt: 1_700_000_000,
+    };
+    await storage.set(`signet-contacts:pending:${GRANT}`, JSON.stringify([renameRow]));
+    const captured: SignedNostrEvent[] = [];
+    const client = createSignetContactsClient({
+      signer: fakeSigner(), storage,
+      relay: { fetchNewest: async () => null, publish: async (e) => { captured.push(e); return true; } },
+      now: () => 1_700_000_500,
+    });
+    await client.load(GRANT);
+    // ADD_KEN_PAIRING grants only add-ken; the rename row's capability is gone.
+    expect(await client.propose(ADD_KEN_PAIRING, [{ action: 'add-ken', value: { pubkey: 'd'.repeat(64), displayName: 'New' } }]))
+      .toBe(true);
+    const batch = parseProposalBatch(plaintextOf(captured[0]!))!;
+    expect(batch.proposals).toHaveLength(1);
+    expect(client.pendingProposals().some((p) => p.operationId === renameRow.operationId)).toBe(true);
+  });
+
+  it('leaves pending fully unchanged, resend candidates included, when the publish fails', async () => {
+    const storage = createMemoryStorage();
+    const existingRow: PendingProposal = {
+      grantId: GRANT, operationId: '4'.repeat(32), action: 'add-ken', value: { pubkey: 'c'.repeat(64), displayName: 'Existing' }, sentAt: 1_700_000_000,
+    };
+    await storage.set(`signet-contacts:pending:${GRANT}`, JSON.stringify([existingRow]));
+    const client = createSignetContactsClient({
+      signer: fakeSigner(), storage,
+      relay: { fetchNewest: async () => null, publish: async () => false },
+      now: () => 1_700_000_500,
+    });
+    await client.load(GRANT);
+    expect(await client.propose(ADD_KEN_PAIRING, [{ action: 'add-ken', value: { pubkey: 'd'.repeat(64), displayName: 'New' } }]))
+      .toBe(false);
+    expect(client.pendingProposals()).toEqual([existingRow]);
+  });
+
+  it('never resends an item reconcilePending already cleared via an accepted projection', async () => {
+    const signer = fakeSigner();
+    const pubkey = 'd'.repeat(64);
+    const proj = projection({
+      contacts: [{ contactId: 'c'.repeat(32), displayName: 'Ada', identities: [{ pubkey }] }],
+    });
+    const content = await sealProjection(signer, proj);
+    const captured: SignedNostrEvent[] = [];
+    const client = createSignetContactsClient({
+      signer,
+      relay: {
+        fetchNewest: async () => signed(projectionEventTemplate(RAIL, GRANT, 1, content)),
+        publish: async (e) => { captured.push(e); return true; },
+      },
+      now: () => 1_700_000_500,
+    });
+    await client.propose(ADD_KEN_PAIRING, [{ action: 'add-ken', value: { pubkey, displayName: 'Ada' } }]);
+    expect(client.pendingProposals()).toHaveLength(1);
+    await client.fetchProjection(PAIRING);
+    expect(client.pendingProposals()).toEqual([]); // reconciled away by the projection
+
+    expect(await client.propose(ADD_KEN_PAIRING, [{ action: 'add-ken', value: { pubkey: 'e'.repeat(64), displayName: 'Bo' } }]))
+      .toBe(true);
+    const batch = parseProposalBatch(plaintextOf(captured[1]!))!;
+    expect(batch.proposals).toHaveLength(1); // nothing resurrected
+  });
+});
+
+describe('pending is scoped to its own grant (F2)', () => {
+  const ADD_KEN_PAIRING: PairingV2 = {
+    ...PAIRING,
+    grantedCapabilities: ['signet.contacts.read:directory', 'signet.contacts.propose:add-ken'],
+  };
+  const GRANT_B = 'e'.repeat(32);
+  const PAIRING_B: PairingV2 = {
+    ...ADD_KEN_PAIRING,
+    grantId: GRANT_B,
+    projectionTag: projectionTag(GRANT_B),
+    proposalTag: proposalTag(GRANT_B, APP),
+  };
+
+  function plaintextOf(event: SignedNostrEvent): string {
+    return (JSON.parse(event.content) as { to: string; plaintext: string }).plaintext;
+  }
+
+  // The finding: re-pairing to a new grant in the same session, with no
+  // reload/restart in between, must never resend the OLD grant's proposals
+  // under the NEW grant's channel.
+  it('re-pairing to a new grant never carries the old grant’s pending proposals into the new one', async () => {
+    const storage = createMemoryStorage();
+    const captured: SignedNostrEvent[] = [];
+    const client = createSignetContactsClient({
+      signer: fakeSigner(), storage,
+      relay: { fetchNewest: async () => null, publish: async (e) => { captured.push(e); return true; } },
+      now: () => 1_700_000_500,
+    });
+
+    // Pending on grant A (the current pairing) — never read by a producer,
+    // so it is still sitting in `pending` when the app re-pairs.
+    const pubkeyA = 'c'.repeat(64);
+    expect(await client.propose(ADD_KEN_PAIRING, [
+      { action: 'add-ken', value: { pubkey: pubkeyA, displayName: 'Ada' } },
+    ])).toBe(true);
+    expect(client.pendingProposals()).toHaveLength(1);
+
+    // Re-pair to grant B, in the same session — no restart, so nothing but
+    // `load` stands between A's leftover row and B's next batch.
+    await client.load(GRANT_B);
+    expect(await client.propose(PAIRING_B, [
+      { action: 'add-ken', value: { pubkey: 'e'.repeat(64), displayName: 'Bo' } },
+    ])).toBe(true);
+
+    // A's entry did not ride along in B's batch.
+    const batchB = parseProposalBatch(plaintextOf(captured[1]!))!;
+    expect(batchB.proposals).toHaveLength(1);
+    expect((batchB.proposals[0]!.value as { pubkey: string }).pubkey).toBe('e'.repeat(64));
+
+    // Nor was it persisted under B's storage key.
+    const storedB = JSON.parse((await storage.get(PENDING_KEY(GRANT_B)))!) as PendingProposal[];
+    expect(storedB).toHaveLength(1);
+    expect(storedB[0]?.grantId).toBe(GRANT_B);
+
+    // It is still pending for A.
+    const pending = client.pendingProposals();
+    expect(pending).toHaveLength(2);
+    const forA = pending.find((p) => (p.value as { pubkey: string }).pubkey === pubkeyA);
+    expect(forA?.grantId).toBe(GRANT);
+  });
+
+  it('load drops a stored pending row carrying a DIFFERENT grantId than the one being loaded', async () => {
+    const storage = createMemoryStorage();
+    // Stored under GRANT_B's own key, but tagged for GRANT (stale key reuse
+    // or a corrupted write) — must not be adopted as a GRANT_B row.
+    await storage.set(PENDING_KEY(GRANT_B), JSON.stringify([
+      { grantId: GRANT, operationId: 'a'.repeat(32), action: 'add-ken', value: { pubkey: 'c'.repeat(64), displayName: 'Ada' }, sentAt: 1 },
+    ]));
+    const client = createSignetContactsClient({
+      signer: fakeSigner(), storage,
+      relay: { fetchNewest: async () => null, publish: async () => true },
+    });
+    await client.load(GRANT_B);
+    expect(client.pendingProposals()).toEqual([]);
+  });
+
+  it('load stamps a legacy row with no grantId with the grant it was just loaded under', async () => {
+    const storage = createMemoryStorage();
+    await storage.set(PENDING_KEY(GRANT), JSON.stringify([
+      { operationId: 'a'.repeat(32), action: 'add-ken', value: { pubkey: 'c'.repeat(64), displayName: 'Ada' }, sentAt: 1 },
+    ]));
+    const client = createSignetContactsClient({
+      signer: fakeSigner(), storage,
+      relay: { fetchNewest: async () => null, publish: async () => true },
+    });
+    await client.load(GRANT);
+    const pending = client.pendingProposals();
+    expect(pending).toHaveLength(1);
+    expect(pending[0]?.grantId).toBe(GRANT);
+  });
+
+  it('reconcilePending only reconciles the grant the projection actually belongs to', async () => {
+    const signer = fakeSigner();
+    const pubkey = 'c'.repeat(64);
+    // Grant B's own projection happens to carry the SAME pubkey as A's
+    // pending add-ken — it must not reconcile A's entry away.
+    const contentB = await sealProjection(signer, projection({
+      grantId: GRANT_B,
+      contacts: [{ contactId: 'c'.repeat(32), displayName: 'Ada', identities: [{ pubkey }] }],
+    }));
+    const client = createSignetContactsClient({
+      signer,
+      relay: {
+        fetchNewest: async () => signed(projectionEventTemplate(RAIL, GRANT_B, 1, contentB)),
+        publish: async () => true,
+      },
+      now: () => 1_700_000_500,
+    });
+    await client.propose(ADD_KEN_PAIRING, [{ action: 'add-ken', value: { pubkey, displayName: 'Ada' } }]);
+    expect(client.pendingProposals()).toHaveLength(1);
+
+    await client.fetchProjection(PAIRING_B);
+    const pending = client.pendingProposals();
+    expect(pending).toHaveLength(1); // A's entry survives B's projection
+    expect(pending[0]?.grantId).toBe(GRANT);
   });
 });
 

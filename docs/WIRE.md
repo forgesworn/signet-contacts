@@ -183,8 +183,68 @@ stored and spent one of the owner's grant slots on a pairing that can never
 complete. An implementation that can only fetch one event per relay should
 query each relay separately rather than one merged newest.
 
+That is the denial-of-service case. The graver one is a **takeover**: a
+photographer who publishes a forged ack encrypted to the app and echoing the
+app's own challenge, addressed to arrive before the owner's real one, wins —
+`awaitPairingAck` accepts the first candidate that decrypts and matches. The
+app is then paired to the attacker's rail, not the owner's: it fetches a
+projection the attacker writes, sends every proposal to the attacker's
+channel, and never sees the owner's directory or blocks, with nothing on
+either screen to say the pairing went to the wrong party.
+
 There is deliberately no author pin on an ack: the carrier key is ephemeral and
-the reader has never seen it before. NIP-44 and the challenge are the gate.
+the reader has never seen it before. NIP-44 and the challenge are the gate —
+which is exactly what a forged ack can also satisfy, so a further check is
+needed once an ack is accepted at all.
+
+### Pairing verification code (B1, F1)
+
+Once `awaitPairingAck` resolves, the consumer can compute a short code from
+values a photographed QR does not carry:
+`pairingCode(appPubkey, challenge, pairing.grantId, pairing.railPubkey)` —
+`src/wire/pairing-code.ts`. `grantId` and `railPubkey` exist only inside the
+real ack, minted the moment Signet approves the grant, so a code built from
+them (rather than from `appPubkey`/`challenge` alone, which the photographer
+already has) differs between the owner's real pairing and an attacker's forged
+one.
+
+The code flows **ONE way**: app screen → person → producer, never back the
+other direction. If Signet ALSO displayed its own code, an attacker who can
+see the owner's screen, pairing with an app that missed the real ack (kind
+21237 is ephemeral; a backgrounded app or a dropped socket loses it), could
+read the owner's code off Signet, grind a grantId/railPubkey to match, and
+publish a forged ack the app then accepts — the
+1-in-1,000,000 claim only holds while the attacker must commit to an ack
+*before* anything about the owner's code exists to copy. Keeping the code on
+one screen only is what keeps that commitment forced.
+
+A consumer:
+
+- **MUST**, once `awaitPairingAck` resolves, show `pairingCode(appPubkey,
+  challenge, pairing.grantId, pairing.railPubkey)` and **MUST NOT** use the
+  pairing — fetch, propose, or persist it as paired — until the user confirms
+  it (the app's own "Continue", pressed only after the user has typed the code
+  into Signet and Signet has confirmed it there).
+- **MUST** always show the code, and **MUST NOT** hide it based on anything the
+  ack itself claims about the producer's version — the ack may be the
+  attacker's.
+- On a mismatch or a cancel, **MUST** discard the pairing and start again with
+  a new challenge.
+- Same-device `https://mysignet.app/pair` hand-off shows no QR and is not
+  exposed to a photographer, but the web `?pair=1` carrier IS shown as a QR
+  for a desktop-to-phone hand-off, so it carries the same exposure and gets the
+  same rule. The code is shown in every case, whether or not that particular
+  carrier was the exposed one.
+
+A producer (Signet):
+
+- **MUST NOT** display its own code. Showing it would hand an attacker who won
+  the race exactly what they need to forge a second, matching ack.
+- **MUST** instead ask the person to type the code the app is showing, compute
+  `pairingCode` itself, and compare with `matchesPairingCode` — on a match,
+  confirm the pairing on screen; on a mismatch, revoke the grant and say so.
+- A producer that predates this check neither shows nor asks for a code at
+  all; that pairing cannot be verified this way.
 
 ## 4. Tag derivations
 
@@ -329,6 +389,13 @@ a later wire version may add them with their own capabilities. A
 in its own projection; the producer maps it back by recomputing
 `scopedContactId` over its own records, never by trusting an app-supplied
 producer-side id.
+
+A batch is one replaceable event per grant, so a second batch overwrites the
+first before the producer necessarily read it (B2). This SDK's own consumer
+client (`propose`) resends what is still waiting on every later call, keyed by
+the SAME `operationId` it minted the first time — a producer must therefore
+treat a repeated `operationId` as already handled, not as an error, exactly as
+the idempotency-key rule in the table above already requires.
 
 ## 6. Capabilities
 

@@ -80,6 +80,22 @@ this wire cannot promise no matter how it is implemented.
   per-app-channel timing trade-off (exploration §5.1): a separate rail per app
   buys unlinkability *between* apps at the cost of one relay being able to
   time a single app's own channel.
+- **B1 — a photographed QR is a takeover risk, not only a denial of service.**
+  `awaitPairingAck` has no author pin (S7) and accepts the first ack that
+  decrypts and echoes the challenge, so a forged ack published from the QR's
+  own `appPubkey`/`challenge` — before the owner's real one lands — pairs the
+  app to the attacker's rail with nothing on screen to say so. The mitigation
+  is `pairingCode(appPubkey, challenge, grantId, railPubkey)`
+  (`src/wire/pairing-code.ts`): `grantId` and `railPubkey` exist only inside
+  the real ack, so the code differs between the real pairing and a forged one.
+  The code flows one way ONLY — the app shows it, the person types it into
+  Signet, Signet compares (`matchesPairingCode`) and never displays its own
+  (F1): if Signet also displayed a code, an attacker who can see the owner's
+  screen could read it and, against an app that missed the real (ephemeral)
+  ack, grind and publish a forged ack to match it after the fact.
+  With the code shown on one screen only, the attacker must commit to a forged
+  ack before anything about the owner's code exists to copy, so they get one
+  guess, at 1-in-1,000,000 odds. See `docs/WIRE.md` §3.
 - **S9 — the rendezvous relay is chosen by the app being paired.** The pairing
   URI names the relay the ack is published to, so approving a grant makes the
   owner's device dial a host the requesting app picked; it is validated for

@@ -2,6 +2,56 @@
 
 ## Unreleased
 
+- **Security (B1, F1): pairing verification code against a photographed-QR
+  takeover, shown ONE way only.** `awaitPairingAck` has no author pin and
+  accepts the first ack that decrypts and echoes the challenge, so a forged
+  ack published from the QR's own `appPubkey`/`challenge` — before the
+  owner's real ack lands — used to pair the app to the attacker's rail with
+  nothing on screen to say so. New `pairingCode(appPubkey, challenge,
+  grantId, railPubkey)` and `formatPairingCode(code)` in
+  `src/wire/pairing-code.ts` (exported from `src/wire/index.ts` and the
+  package root) build a 6-digit code from values — `grantId`, `railPubkey` —
+  that exist only inside the real ack, never inside the photographed QR. The
+  code flows one way: the consumer (app) shows it; the producer (Signet)
+  **never** displays its own — showing both would let an attacker whose
+  forged ack landed first read the owner's code off Signet's screen and
+  forge a second ack to match it after the fact. Signet instead asks the
+  person to type the code the app is showing and checks it itself with new
+  `matchesPairingCode(input, typed)`, which strips spaces/hyphens and never
+  throws on a bad `typed`. `docs/WIRE.md` §3 states the consumer/producer
+  rules, `SECURITY.md` names the threat as B1, and `docs/INTEGRATION.md`'s
+  pairing walkthrough shows the one-way confirm step before a pairing is used
+  for anything. `vectors/pairing-code.json` freezes four cases. No wire
+  message, ack, projection, or QR format changed.
+- **Fix (B2): proposal resend.** Proposals ride one replaceable event per
+  grant, so a second `propose` call used to overwrite the first before Signet
+  had read it, and the client never resent — a suggestion sent while Signet
+  was offline, or between two propose calls, was silently lost. `propose` now
+  carries every still-pending proposal alongside new ones, rebuilt with its
+  original `operationId`/`action`/`value`/`createdAt` so a resend is
+  byte-identical in meaning to the first send; new proposals always come
+  first, and resends are newest-`sentAt`-first, so new suggestions are never
+  squeezed out by old stuck ones. See the `propose` doc comment
+  (`src/client.ts`) and `docs/WIRE.md`'s proposal-batch section. No wire
+  message or batch shape changed — a consumer resending an operationId a
+  producer already applied is exactly the idempotency this wire already had.
+- **Fix (F2): pending proposals scoped to their own grant.** `pending` is
+  consumer-side state shared across whatever grants a client has ever loaded
+  in one session; a re-pair to a new grant without a restart could resend the
+  OLD grant's still-waiting proposals under the NEW grant's channel, creating
+  contacts in the wrong directory. `PendingProposal` now carries its own
+  `grantId`, stamped on push and on `load()`; resend selection, the
+  new-draft-supersedes-old check, `persistPending`, and `reconcilePending`
+  are all scoped to the grant they belong to, so one grant's rows are never
+  read, resent, persisted under, or reconciled against another's. A stored
+  row from before this fix (no `grantId`) is stamped with the grant it is
+  loaded under; a stored row carrying a different `grantId` is dropped. No
+  wire format changed — this is consumer-side bookkeeping only.
+- **Fix (F3): duplicate new drafts in one `propose` call.** Two drafts in the
+  same call for the same add-ken pubkey (case-insensitive) or the same
+  rename-app-label contactId used to both mint a proposal; only the last of
+  each is kept now, so a rename can never lose last-writer-wins to its own
+  sibling in the same batch.
 - **Contract (docs only; no wire bytes, versions or tag derivations changed).**
   The capability-scoped v2 contract is frozen. `docs/WIRE.md` gains a per-message
   version table (§0): the app-access rail (pairing, ack, envelope, projection)

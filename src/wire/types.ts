@@ -120,8 +120,16 @@ export interface ContactsState {
 
 /** R-9: consumer-side only. The SDK remembers what it proposed so an app can
  *  show "sent, not applied yet"; nothing about this is ever on the wire, and
- *  the producer never stores it. */
+ *  the producer never stores it.
+ *
+ *  F2: `grantId` scopes the entry to the grant it was sent under. `pending`
+ *  can hold rows for more than one grant in the same client session (a
+ *  re-pair without a restart) — without this tag, a resend after re-pairing
+ *  had no way to tell "still waiting on the old grant" from "waiting on the
+ *  new one" and could resend the old grant's proposals under the new one's
+ *  channel, creating contacts in the wrong directory. */
 export interface PendingProposal {
+  grantId: string;
   operationId: string;
   action: 'add-ken' | 'rename-app-label';
   value: AddKenValue | RenameAppLabelValue;

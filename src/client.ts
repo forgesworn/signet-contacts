@@ -20,7 +20,8 @@
  * ack) and is always author-pinned before its ciphertext is even opened.
  */
 import {
-  ACK_CANDIDATE_LIMIT, ACK_KIND, PAIRING_FRESHNESS_SECONDS, isCapability,
+  ACK_CANDIDATE_LIMIT, ACK_KIND, MAX_PROPOSALS_PER_BATCH, MAX_STALENESS_SECONDS,
+  PAIRING_FRESHNESS_SECONDS, isCapability,
 } from './wire/constants.js';
 import type { Capability } from './wire/constants.js';
 import { parsePairingAckV2, pairingFromAck } from './wire/ack.js';
@@ -82,6 +83,36 @@ export interface SignetContactsClient {
   getState(): ContactsState;
   getBlockedSet(): Set<string>;
   isFresh(nowSec?: number): boolean;
+  /**
+   * B2: each call also RESENDS what is still waiting. Proposals ride one
+   * replaceable event per grant, so a second `propose` before Signet has
+   * read the first would otherwise overwrite it — and this client never
+   * polls to find out whether that happened. Every batch therefore carries
+   * the new `drafts` FIRST, then every still-`pending` entry that has not
+   * gone stale (`min(maxPendingStalenessSeconds, MAX_STALENESS_SECONDS)`),
+   * still has its capability, and is not superseded by one of the new
+   * drafts (an `add-ken` for the same pubkey, or a `rename-app-label` for
+   * the same contactId) — newest `sentAt` first, capped so new suggestions
+   * are never squeezed out of the batch by old stuck ones. A resent entry
+   * is rebuilt with its ORIGINAL `operationId`/`action`/`value`/`createdAt`
+   * (a rename's original `updatedAt` included) — byte-identical in meaning
+   * to the first send, so a producer's replay check and LWW behave exactly
+   * as they did then. On a successful publish, superseded entries are
+   * dropped from `pending` and new ones are added; a resent entry keeps its
+   * original `sentAt`. On failure `pending` is untouched. An entry pushed
+   * out of the batch by the cap is not dropped — it stays pending and ages
+   * out later via `reconcilePending`'s own staleness check, same as always.
+   *
+   * F2: every step above is scoped to THIS grant. `pending` may hold rows
+   * for another grant too (a re-pair without a restart) — those are never
+   * read as resend candidates, never counted as superseded, and never
+   * touched by this call's writes to `pending` or storage.
+   *
+   * F3: two `drafts` in ONE call for the same add-ken pubkey
+   * (case-insensitive) or the same rename-app-label contactId are deduped
+   * first, keeping only the last — a rename must not lose last-writer-wins
+   * to its own sibling in the same batch.
+   */
   propose(pairing: PairingV2, drafts: readonly ContactProposalDraft[]): Promise<boolean>;
   /**
    * R-9: proposals this client has sent that it has not yet seen applied.
@@ -150,15 +181,24 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => { setTimeout(resolve, ms); });
 }
 
+/** A row read back from storage that predates F2's `grantId` tag, or one a
+ *  future write mangled — `load` stamps the former with the grant it was
+ *  just loaded under and drops the latter (a non-matching `grantId`) before
+ *  either ever reaches `pending`. */
+type StoredPendingProposal = Omit<PendingProposal, 'grantId'> & { grantId?: string };
+
 /**
  * A stored pending row is trusted no further than a wire
  * value would be — `operationId` is checked as the 32-hex id it always is
  * (`randomHex(16)`), and `value`'s shape is checked against the SAME two
- * value types the wire itself allows, per `action`.
+ * value types the wire itself allows, per `action`. `grantId` (F2) is
+ * optional here — a row with none is still a VALID row, just an old one;
+ * `load` is what decides whether it belongs to the grant being loaded.
  */
-function isValidPendingProposal(candidate: unknown): candidate is PendingProposal {
+function isValidPendingProposal(candidate: unknown): candidate is StoredPendingProposal {
   if (typeof candidate !== 'object' || candidate === null) return false;
   const o = candidate as Record<string, unknown>;
+  if (o.grantId !== undefined && !isHex(o.grantId, 32)) return false;
   if (!isHex(o.operationId, 32)) return false;
   if (typeof o.sentAt !== 'number' || !Number.isFinite(o.sentAt)) return false;
   if (typeof o.value !== 'object' || o.value === null) return false;
@@ -212,7 +252,12 @@ export function createSignetContactsClient(opts: {
    */
   async function persistPending(grantId: string): Promise<void> {
     try {
-      await storage.set(`${PENDING_KEY_PREFIX}${grantId}`, JSON.stringify(pending));
+      // F2: only THIS grant's rows go under this grant's key — `pending` may
+      // hold another grant's entries too (a re-pair without a restart), and
+      // writing those under `grantId`'s storage key would resurrect them
+      // under the wrong grant on a later `load(grantId)`.
+      const scoped = pending.filter((p) => p.grantId === grantId);
+      await storage.set(`${PENDING_KEY_PREFIX}${grantId}`, JSON.stringify(scoped));
     } catch {
       // See persistState — storage is a convenience, not a correctness input.
     }
@@ -232,6 +277,10 @@ export function createSignetContactsClient(opts: {
       if (contact.displayName !== undefined) labels.set(contact.contactId, contact.displayName);
     }
     pending = pending.filter((p) => {
+      // F2: a projection is one grant's own view — it can only ever confirm
+      // or age out THAT grant's pending entries. Another grant's rows pass
+      // through untouched here.
+      if (p.grantId !== projection.grantId) return true;
       if (nowSec - p.sentAt > maxPendingStaleness) return false;
       if (p.action === 'add-ken') {
         return !pubkeys.has((p.value as AddKenValue).pubkey.toLowerCase());
@@ -547,7 +596,12 @@ export function createSignetContactsClient(opts: {
 
       const createdAt = now();
       let plaintext: string;
-      let proposals: ContactProposalV1[];
+      let newProposals: ContactProposalV1[];
+      // B2: which PENDING entries a new draft supersedes — an `add-ken` for
+      // the same pubkey, or a `rename-app-label` for the same contactId.
+      // Populated inside the try below (it depends on `newProposals`) but
+      // declared here so the success branch after publish can use it too.
+      let isSuperseded: (p: PendingProposal) => boolean = () => false;
       try {
         // A rename draft with no `updatedAt` is
         // stamped from the client's OWN injected clock, not `draftToProposal`'s
@@ -558,8 +612,78 @@ export function createSignetContactsClient(opts: {
             ? { ...d, value: { ...d.value, updatedAt: nowMs() } }
             : d
         ));
-        proposals = stamped.map((d) => draftToProposal(d, pairing.grantId, createdAt));
-        plaintext = buildProposalBatch(proposals);
+        // F3: two drafts in ONE call for the same add-ken pubkey
+        // (case-insensitive) or the same rename-app-label contactId would
+        // otherwise both mint a proposal — keep only the LAST of each, so a
+        // rename never loses LWW to its own sibling in the same batch.
+        // `Map#set` on a key already present replaces the value but keeps
+        // the key's original iteration position, which is exactly "last
+        // value, first-seen order".
+        const dedupedDrafts = new Map<string, ContactProposalDraft>();
+        for (const d of stamped) {
+          const dedupeKey = d.action === 'add-ken'
+            ? `add-ken:${d.value.pubkey.toLowerCase()}`
+            : `rename-app-label:${d.value.contactId}`;
+          dedupedDrafts.set(dedupeKey, d);
+        }
+        newProposals = Array.from(dedupedDrafts.values()).map((d) => draftToProposal(d, pairing.grantId, createdAt));
+
+        // B2: resend everything still pending that this batch does not make
+        // redundant, so a proposal Signet never got to read (offline, or
+        // overwritten by an earlier `propose` before that first send was
+        // read) is not lost for good.
+        const supersededKenPubkeys = new Set(
+          newProposals
+            .filter((p): p is ContactProposalV1 & { value: AddKenValue } => p.action === 'add-ken')
+            .map((p) => p.value.pubkey.toLowerCase()),
+        );
+        const supersededRenameIds = new Set(
+          newProposals
+            .filter((p): p is ContactProposalV1 & { value: RenameAppLabelValue } => p.action === 'rename-app-label')
+            .map((p) => p.value.contactId),
+        );
+        // F2: superseding is scoped to THIS grant — `pending` may hold
+        // another grant's rows too, and a coincidental pubkey/contactId match
+        // there must not drop an entry that belongs to a different directory.
+        isSuperseded = (p) => (
+          p.grantId === pairing.grantId
+          && (p.action === 'add-ken'
+            ? supersededKenPubkeys.has((p.value as AddKenValue).pubkey.toLowerCase())
+            : supersededRenameIds.has((p.value as RenameAppLabelValue).contactId))
+        );
+        // The tighter of the two staleness ceilings: a caller's own window
+        // never overrides the wire's own resend limit.
+        const maxResendAge = Math.min(maxPendingStaleness, MAX_STALENESS_SECONDS);
+        // F2: only THIS grant's pending entries are ever resent — another
+        // grant's rows sitting in `pending` from a re-pair earlier this
+        // session must never go out under `pairing.grantId`'s channel.
+        const eligible = pending.filter((p) => (
+          p.grantId === pairing.grantId
+          && createdAt - p.sentAt <= maxResendAge
+          && granted.has(CAPABILITY_FOR_ACTION[p.action])
+          && !isSuperseded(p)
+        ));
+        // Newest first — `Array#sort` is stable, so entries sent in the same
+        // second keep their existing relative order. New proposals always
+        // come first in the BATCH (below), and this ordering is what keeps a
+        // fresh suggestion from being squeezed out of the cap by an old one
+        // that has been stuck since before it: only the OLDEST resend
+        // candidates are ever dropped when the budget runs out, and a
+        // dropped one is not lost — it stays `pending` and ages out later via
+        // `reconcilePending`'s own staleness check, same as always.
+        eligible.sort((a, b) => b.sentAt - a.sentAt);
+        const resendEntries = eligible.slice(0, Math.max(0, MAX_PROPOSALS_PER_BATCH - newProposals.length));
+
+        // Rebuilt with the ORIGINAL operationId/action/value/createdAt (a
+        // rename's original updatedAt included) — a resend must be
+        // byte-identical in meaning to the first send, so a producer's replay
+        // check (operationId seen) and LWW behave exactly as they did then.
+        const resendProposals = resendEntries.map((p) => ({
+          v: 1, grantId: pairing.grantId, operationId: p.operationId, action: p.action,
+          value: p.value, createdAt: p.sentAt,
+        }) as ContactProposalV1);
+
+        plaintext = buildProposalBatch([...newProposals, ...resendProposals]);
       } catch {
         return false;
       }
@@ -576,13 +700,19 @@ export function createSignetContactsClient(opts: {
       } catch {
         return false;
       }
-      // R-9: only a proposal that actually reached a relay is pending. One that
-      // never got out is not "waiting for the owner", it is "not sent".
+      // R-9: only a batch that actually reached a relay changes `pending` —
+      // one that never got out is not "waiting for the owner", it is "not
+      // sent", and a resend that never sent must not be treated as handled.
       if (ok) {
-        for (const proposal of proposals) {
+        // Superseded entries are dropped; a resent entry is untouched here
+        // (same object, same `sentAt`) because it is not superseded by
+        // construction (`eligible` already excluded superseded rows) —
+        // filtering on `isSuperseded` alone is enough to leave it in place.
+        pending = pending.filter((p) => !isSuperseded(p));
+        for (const proposal of newProposals) {
           pending.push({
-            operationId: proposal.operationId, action: proposal.action,
-            value: proposal.value, sentAt: createdAt,
+            grantId: pairing.grantId, operationId: proposal.operationId,
+            action: proposal.action, value: proposal.value, sentAt: createdAt,
           });
         }
         // Keyed off `pairing.grantId`, not `state.grantId` —
@@ -606,8 +736,14 @@ export function createSignetContactsClient(opts: {
     },
 
     async load(grantId) {
+      // F2: `pending` can hold another grant's rows too (a re-pair without a
+      // restart). `load(grantId)` only ever replaces THIS grant's own
+      // entries — with whatever is stored under its key, or with nothing if
+      // there is no stored row — and leaves every other grant's rows alone.
       try {
         const rawPending = await storage.get(`${PENDING_KEY_PREFIX}${grantId}`);
+        // Only once the read succeeded: a throwing store keeps what is in memory.
+        pending = pending.filter((p) => p.grantId !== grantId);
         if (rawPending) {
           const parsed = JSON.parse(rawPending) as unknown;
           // A per-row shape check, not just "has the two
@@ -617,12 +753,24 @@ export function createSignetContactsClient(opts: {
           // subject to partial writes), and `reconcilePending` later does
           // `(p.value as AddKenValue).pubkey.toLowerCase()` unconditionally —
           // a malformed row would throw there on every future
-          // `fetchProjection`, not just at load time.
-          if (Array.isArray(parsed)) pending = parsed.filter(isValidPendingProposal);
+          // `fetchProjection`, not just at load time. A row with no
+          // `grantId` (written before F2) is stamped with the grant it was
+          // just loaded under; one with a DIFFERENT grantId (stale key
+          // reuse, a corrupted write) is dropped rather than resent under
+          // the wrong grant.
+          if (Array.isArray(parsed)) {
+            const loaded = parsed
+              .filter(isValidPendingProposal)
+              .filter((p) => p.grantId === undefined || p.grantId === grantId)
+              .map((p): PendingProposal => ({ ...p, grantId }));
+            pending = [...pending, ...loaded];
+          }
         }
       } catch {
-        // Unreadable pending state: start with none. It is a UI convenience,
-        // never a correctness input — unlike the sticky Blocked set below.
+        // Unreadable pending state for this grant: nothing loaded for it —
+        // it is a UI convenience, never a correctness input — unlike the
+        // sticky Blocked set below. Other grants' entries, filtered in
+        // above, are untouched.
       }
       try {
         const raw = await storage.get(`${STATE_KEY_PREFIX}${grantId}`);
