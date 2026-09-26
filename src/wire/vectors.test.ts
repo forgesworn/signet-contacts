@@ -5,6 +5,7 @@ import { buildPairingAckV2, parsePairingAckV2 } from './ack.js';
 import { buildProjection, parseProjection } from './projection.js';
 import { buildProposalBatch, parseProposalBatch } from './proposal.js';
 import { projectionTag, proposalTag, scopedContactId, sanitizeWireText } from './ids.js';
+import { pairingCode } from './pairing-code.js';
 import { MAX_DISPLAY_NAME } from './constants.js';
 import type { ContactProjectionV2, ContactProposalV1, PairingAckV2 } from './types.js';
 import { sealVaultPayload, openVaultPayload } from './envelope.js';
@@ -257,6 +258,39 @@ describe('vectors', () => {
     });
   });
 
+  it('freezes the pairing verification code (B1)', () => {
+    // Deliberately lowercase, unlike the file-level CHALLENGE — so the next
+    // case's `.toUpperCase()` actually differs from this one on the wire.
+    const LOWER_CHALLENGE = CHALLENGE.toLowerCase();
+    // Base case, and the SAME inputs with an uppercase challenge — the QR's
+    // challenge may arrive either case, and a producer/consumer that hashed
+    // it as received rather than lowercased would show two different codes
+    // for what is really one pairing.
+    const base = { appPubkey: APP, challenge: LOWER_CHALLENGE, grantId: GRANT, railPubkey: RAIL };
+    const upperChallenge = { ...base, challenge: LOWER_CHALLENGE.toUpperCase() };
+    // Found by search: a grantId that happens to produce a code with a
+    // leading zero, so a regression that dropped `padStart` is caught here
+    // rather than only on an unlucky run.
+    const leadingZero = { ...base, grantId: 'c0000001099999999999999999999999' };
+    const distinct = {
+      appPubkey: '3'.repeat(64), challenge: '9'.repeat(32), grantId: '5'.repeat(32), railPubkey: '7'.repeat(64),
+    };
+    const cases = [
+      { description: 'base case', input: base, code: pairingCode(base) },
+      { description: 'same pairing, uppercase challenge — same code', input: upperChallenge, code: pairingCode(upperChallenge) },
+      { description: 'a grantId chosen to produce a leading zero', input: leadingZero, code: pairingCode(leadingZero) },
+      { description: 'a fully distinct pairing', input: distinct, code: pairingCode(distinct) },
+    ];
+    expect(cases[0]?.code).toBe(cases[1]?.code);
+    expect(cases[2]?.code.startsWith('0')).toBe(true);
+    for (const c of cases) expect(c.code).toMatch(/^[0-9]{6}$/);
+
+    frozen('vectors/pairing-code.json', {
+      description: 'pairingCode: a 6-digit code built from appPubkey, challenge, grantId and railPubkey (B1). Producer and consumer must agree byte for byte.',
+      cases,
+    });
+  });
+
   it('freezes a sealed vault envelope, opened by the SDK\'s own openVaultPayload with real NIP-44', async () => {
     // R-4 addition (controller ruling). Everything above this line exercises
     // this package's own JSON framing; this vector proves the SDK can open a
@@ -368,6 +402,7 @@ describe('vectors', () => {
       'vectors/proposal.v1.json',
       'vectors/sanitise.json',
       'vectors/envelope.v2.json',
+      'vectors/pairing-code.json',
     ];
     for (const path of files) {
       const bytes = readFileSync(path);

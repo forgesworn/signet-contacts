@@ -69,6 +69,29 @@ if (pairing === null) {
   // timed out, or the owner declined — show the QR again, do not retry silently
   return;
 }
+```
+
+**Before doing anything else with `pairing`** — before saving it, fetching a
+projection, or sending a proposal — show the pairing verification code and
+have the person confirm it against the same code Signet shows (B1). A QR is
+photographable, and `awaitPairingAck` has no author pin, so an attacker who
+publishes a forged ack before the owner's real one lands otherwise pairs the
+app to their own rail with nothing on screen to say so:
+
+```ts
+import { pairingCode, formatPairingCode } from '@forgesworn/signet-contacts/wire';
+
+const code = pairingCode({
+  appPubkey: signer.pubkey, // your app's own signer pubkey — same value buildPairingUri used
+  challenge,
+  grantId: pairing.grantId,
+  railPubkey: pairing.railPubkey,
+});
+const confirmed = await showPairingCodeAndConfirm(formatPairingCode(code)); // "042 917"
+if (!confirmed) {
+  // codes did not match — discard this pairing and start again with a fresh challenge
+  return;
+}
 await savePairing(pairing); // your own persistence — plain JSON
 ```
 

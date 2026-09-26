@@ -3,6 +3,7 @@ export * from './constants.js';
 export * from './types.js';
 export * from './ids.js';
 export * from './pairing.js';
+export * from './pairing-code.js';
 export * from './ack.js';
 export * from './envelope.js';
 export * from './projection.js';

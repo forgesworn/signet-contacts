@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- **Security (B1): pairing verification code against a photographed-QR
+  takeover.** `awaitPairingAck` has no author pin and accepts the first ack
+  that decrypts and echoes the challenge, so a forged ack published from the
+  QR's own `appPubkey`/`challenge` — before the owner's real ack lands — used
+  to pair the app to the attacker's rail with nothing on screen to say so.
+  New `pairingCode(appPubkey, challenge, grantId, railPubkey)` and
+  `formatPairingCode(code)` in `src/wire/pairing-code.ts` (exported from
+  `src/wire/index.ts` and the package root) build a 6-digit code from values
+  — `grantId`, `railPubkey` — that exist only inside the real ack, never
+  inside the photographed QR; `docs/WIRE.md` §3 states the consumer/producer
+  rules, `SECURITY.md` names the threat as B1, and `docs/INTEGRATION.md`'s
+  pairing walkthrough adds the confirm step before a pairing is used for
+  anything. `vectors/pairing-code.json` freezes four cases. No wire message,
+  ack, projection, or QR format changed.
 - **Contract (docs only; no wire bytes, versions or tag derivations changed).**
   The capability-scoped v2 contract is frozen. `docs/WIRE.md` gains a per-message
   version table (§0): the app-access rail (pairing, ack, envelope, projection)

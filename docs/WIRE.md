@@ -183,8 +183,53 @@ stored and spent one of the owner's grant slots on a pairing that can never
 complete. An implementation that can only fetch one event per relay should
 query each relay separately rather than one merged newest.
 
+That is the denial-of-service case. The graver one is a **takeover**: a
+photographer who publishes a forged ack encrypted to the app and echoing the
+app's own challenge, addressed to arrive before the owner's real one, wins —
+`awaitPairingAck` accepts the first candidate that decrypts and matches. The
+app is then paired to the attacker's rail, not the owner's: it fetches a
+projection the attacker writes, sends every proposal to the attacker's
+channel, and never sees the owner's directory or blocks, with nothing on
+either screen to say the pairing went to the wrong party.
+
 There is deliberately no author pin on an ack: the carrier key is ephemeral and
-the reader has never seen it before. NIP-44 and the challenge are the gate.
+the reader has never seen it before. NIP-44 and the challenge are the gate —
+which is exactly what a forged ack can also satisfy, so a further check is
+needed once an ack is accepted at all.
+
+### Pairing verification code (B1)
+
+Once `awaitPairingAck` resolves, both screens can compute the same short code
+from values a photographed QR does not carry:
+`pairingCode(appPubkey, challenge, pairing.grantId, pairing.railPubkey)` —
+`src/wire/pairing-code.ts`. `grantId` and `railPubkey` exist only inside the
+real ack, minted the moment Signet approves the grant, so a code built from
+them (rather than from `appPubkey`/`challenge` alone, which the photographer
+already has) differs between the owner's real pairing and an attacker's forged
+one. Because `awaitPairingAck` accepts the first ack that decrypts and echoes
+the challenge, an attacker gets exactly one guess at the owner's code, so a
+forged pairing matches it with probability 1 in 1,000,000.
+
+A consumer:
+
+- **MUST**, once `awaitPairingAck` resolves, show `pairingCode(appPubkey,
+  challenge, pairing.grantId, pairing.railPubkey)` and **MUST NOT** use the
+  pairing — fetch, propose, or persist it as paired — until the user confirms
+  it matches the code Signet shows.
+- **MUST** always show the code, and **MUST NOT** hide it based on anything the
+  ack itself claims about the producer's version — the ack may be the
+  attacker's.
+- On a mismatch, **MUST** discard the pairing and start again with a new
+  challenge.
+- A producer **SHOULD** show the same code once its ack has landed, and offer
+  to revoke the grant if the user says the two codes differ.
+- An older producer shows no code at all; that pairing cannot be checked this
+  way.
+- Same-device `https://mysignet.app/pair` hand-off shows no QR and is not
+  exposed to a photographer, but the web `?pair=1` carrier IS shown as a QR
+  for a desktop-to-phone hand-off, so it carries the same exposure and gets the
+  same rule. The code is shown in every case, whether or not that particular
+  carrier was the exposed one.
 
 ## 4. Tag derivations
 
