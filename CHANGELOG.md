@@ -35,6 +35,23 @@
   (`src/client.ts`) and `docs/WIRE.md`'s proposal-batch section. No wire
   message or batch shape changed — a consumer resending an operationId a
   producer already applied is exactly the idempotency this wire already had.
+- **Fix (F2): pending proposals scoped to their own grant.** `pending` is
+  consumer-side state shared across whatever grants a client has ever loaded
+  in one session; a re-pair to a new grant without a restart could resend the
+  OLD grant's still-waiting proposals under the NEW grant's channel, creating
+  contacts in the wrong directory. `PendingProposal` now carries its own
+  `grantId`, stamped on push and on `load()`; resend selection, the
+  new-draft-supersedes-old check, `persistPending`, and `reconcilePending`
+  are all scoped to the grant they belong to, so one grant's rows are never
+  read, resent, persisted under, or reconciled against another's. A stored
+  row from before this fix (no `grantId`) is stamped with the grant it is
+  loaded under; a stored row carrying a different `grantId` is dropped. No
+  wire format changed — this is consumer-side bookkeeping only.
+- **Fix (F3): duplicate new drafts in one `propose` call.** Two drafts in the
+  same call for the same add-ken pubkey (case-insensitive) or the same
+  rename-app-label contactId used to both mint a proposal; only the last of
+  each is kept now, so a rename can never lose last-writer-wins to its own
+  sibling in the same batch.
 - **Contract (docs only; no wire bytes, versions or tag derivations changed).**
   The capability-scoped v2 contract is frozen. `docs/WIRE.md` gains a per-message
   version table (§0): the app-access rail (pairing, ack, envelope, projection)

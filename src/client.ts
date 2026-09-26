@@ -102,6 +102,16 @@ export interface SignetContactsClient {
    * original `sentAt`. On failure `pending` is untouched. An entry pushed
    * out of the batch by the cap is not dropped — it stays pending and ages
    * out later via `reconcilePending`'s own staleness check, same as always.
+   *
+   * F2: every step above is scoped to THIS grant. `pending` may hold rows
+   * for another grant too (a re-pair without a restart) — those are never
+   * read as resend candidates, never counted as superseded, and never
+   * touched by this call's writes to `pending` or storage.
+   *
+   * F3: two `drafts` in ONE call for the same add-ken pubkey
+   * (case-insensitive) or the same rename-app-label contactId are deduped
+   * first, keeping only the last — a rename must not lose last-writer-wins
+   * to its own sibling in the same batch.
    */
   propose(pairing: PairingV2, drafts: readonly ContactProposalDraft[]): Promise<boolean>;
   /**
@@ -171,15 +181,24 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => { setTimeout(resolve, ms); });
 }
 
+/** A row read back from storage that predates F2's `grantId` tag, or one a
+ *  future write mangled — `load` stamps the former with the grant it was
+ *  just loaded under and drops the latter (a non-matching `grantId`) before
+ *  either ever reaches `pending`. */
+type StoredPendingProposal = Omit<PendingProposal, 'grantId'> & { grantId?: string };
+
 /**
  * A stored pending row is trusted no further than a wire
  * value would be — `operationId` is checked as the 32-hex id it always is
  * (`randomHex(16)`), and `value`'s shape is checked against the SAME two
- * value types the wire itself allows, per `action`.
+ * value types the wire itself allows, per `action`. `grantId` (F2) is
+ * optional here — a row with none is still a VALID row, just an old one;
+ * `load` is what decides whether it belongs to the grant being loaded.
  */
-function isValidPendingProposal(candidate: unknown): candidate is PendingProposal {
+function isValidPendingProposal(candidate: unknown): candidate is StoredPendingProposal {
   if (typeof candidate !== 'object' || candidate === null) return false;
   const o = candidate as Record<string, unknown>;
+  if (o.grantId !== undefined && !isHex(o.grantId, 32)) return false;
   if (!isHex(o.operationId, 32)) return false;
   if (typeof o.sentAt !== 'number' || !Number.isFinite(o.sentAt)) return false;
   if (typeof o.value !== 'object' || o.value === null) return false;
@@ -233,7 +252,12 @@ export function createSignetContactsClient(opts: {
    */
   async function persistPending(grantId: string): Promise<void> {
     try {
-      await storage.set(`${PENDING_KEY_PREFIX}${grantId}`, JSON.stringify(pending));
+      // F2: only THIS grant's rows go under this grant's key — `pending` may
+      // hold another grant's entries too (a re-pair without a restart), and
+      // writing those under `grantId`'s storage key would resurrect them
+      // under the wrong grant on a later `load(grantId)`.
+      const scoped = pending.filter((p) => p.grantId === grantId);
+      await storage.set(`${PENDING_KEY_PREFIX}${grantId}`, JSON.stringify(scoped));
     } catch {
       // See persistState — storage is a convenience, not a correctness input.
     }
@@ -253,6 +277,10 @@ export function createSignetContactsClient(opts: {
       if (contact.displayName !== undefined) labels.set(contact.contactId, contact.displayName);
     }
     pending = pending.filter((p) => {
+      // F2: a projection is one grant's own view — it can only ever confirm
+      // or age out THAT grant's pending entries. Another grant's rows pass
+      // through untouched here.
+      if (p.grantId !== projection.grantId) return true;
       if (nowSec - p.sentAt > maxPendingStaleness) return false;
       if (p.action === 'add-ken') {
         return !pubkeys.has((p.value as AddKenValue).pubkey.toLowerCase());
@@ -584,7 +612,21 @@ export function createSignetContactsClient(opts: {
             ? { ...d, value: { ...d.value, updatedAt: nowMs() } }
             : d
         ));
-        newProposals = stamped.map((d) => draftToProposal(d, pairing.grantId, createdAt));
+        // F3: two drafts in ONE call for the same add-ken pubkey
+        // (case-insensitive) or the same rename-app-label contactId would
+        // otherwise both mint a proposal — keep only the LAST of each, so a
+        // rename never loses LWW to its own sibling in the same batch.
+        // `Map#set` on a key already present replaces the value but keeps
+        // the key's original iteration position, which is exactly "last
+        // value, first-seen order".
+        const dedupedDrafts = new Map<string, ContactProposalDraft>();
+        for (const d of stamped) {
+          const dedupeKey = d.action === 'add-ken'
+            ? `add-ken:${d.value.pubkey.toLowerCase()}`
+            : `rename-app-label:${d.value.contactId}`;
+          dedupedDrafts.set(dedupeKey, d);
+        }
+        newProposals = Array.from(dedupedDrafts.values()).map((d) => draftToProposal(d, pairing.grantId, createdAt));
 
         // B2: resend everything still pending that this batch does not make
         // redundant, so a proposal Signet never got to read (offline, or
@@ -600,16 +642,24 @@ export function createSignetContactsClient(opts: {
             .filter((p): p is ContactProposalV1 & { value: RenameAppLabelValue } => p.action === 'rename-app-label')
             .map((p) => p.value.contactId),
         );
+        // F2: superseding is scoped to THIS grant — `pending` may hold
+        // another grant's rows too, and a coincidental pubkey/contactId match
+        // there must not drop an entry that belongs to a different directory.
         isSuperseded = (p) => (
-          p.action === 'add-ken'
+          p.grantId === pairing.grantId
+          && (p.action === 'add-ken'
             ? supersededKenPubkeys.has((p.value as AddKenValue).pubkey.toLowerCase())
-            : supersededRenameIds.has((p.value as RenameAppLabelValue).contactId)
+            : supersededRenameIds.has((p.value as RenameAppLabelValue).contactId))
         );
         // The tighter of the two staleness ceilings: a caller's own window
         // never overrides the wire's own resend limit.
         const maxResendAge = Math.min(maxPendingStaleness, MAX_STALENESS_SECONDS);
+        // F2: only THIS grant's pending entries are ever resent — another
+        // grant's rows sitting in `pending` from a re-pair earlier this
+        // session must never go out under `pairing.grantId`'s channel.
         const eligible = pending.filter((p) => (
-          createdAt - p.sentAt <= maxResendAge
+          p.grantId === pairing.grantId
+          && createdAt - p.sentAt <= maxResendAge
           && granted.has(CAPABILITY_FOR_ACTION[p.action])
           && !isSuperseded(p)
         ));
@@ -661,8 +711,8 @@ export function createSignetContactsClient(opts: {
         pending = pending.filter((p) => !isSuperseded(p));
         for (const proposal of newProposals) {
           pending.push({
-            operationId: proposal.operationId, action: proposal.action,
-            value: proposal.value, sentAt: createdAt,
+            grantId: pairing.grantId, operationId: proposal.operationId,
+            action: proposal.action, value: proposal.value, sentAt: createdAt,
           });
         }
         // Keyed off `pairing.grantId`, not `state.grantId` —
@@ -686,6 +736,11 @@ export function createSignetContactsClient(opts: {
     },
 
     async load(grantId) {
+      // F2: `pending` can hold another grant's rows too (a re-pair without a
+      // restart). `load(grantId)` only ever replaces THIS grant's own
+      // entries — with whatever is stored under its key, or with nothing if
+      // there is no stored row — and leaves every other grant's rows alone.
+      pending = pending.filter((p) => p.grantId !== grantId);
       try {
         const rawPending = await storage.get(`${PENDING_KEY_PREFIX}${grantId}`);
         if (rawPending) {
@@ -697,12 +752,24 @@ export function createSignetContactsClient(opts: {
           // subject to partial writes), and `reconcilePending` later does
           // `(p.value as AddKenValue).pubkey.toLowerCase()` unconditionally —
           // a malformed row would throw there on every future
-          // `fetchProjection`, not just at load time.
-          if (Array.isArray(parsed)) pending = parsed.filter(isValidPendingProposal);
+          // `fetchProjection`, not just at load time. A row with no
+          // `grantId` (written before F2) is stamped with the grant it was
+          // just loaded under; one with a DIFFERENT grantId (stale key
+          // reuse, a corrupted write) is dropped rather than resent under
+          // the wrong grant.
+          if (Array.isArray(parsed)) {
+            const loaded = parsed
+              .filter(isValidPendingProposal)
+              .filter((p) => p.grantId === undefined || p.grantId === grantId)
+              .map((p): PendingProposal => ({ ...p, grantId }));
+            pending = [...pending, ...loaded];
+          }
         }
       } catch {
-        // Unreadable pending state: start with none. It is a UI convenience,
-        // never a correctness input — unlike the sticky Blocked set below.
+        // Unreadable pending state for this grant: nothing loaded for it —
+        // it is a UI convenience, never a correctness input — unlike the
+        // sticky Blocked set below. Other grants' entries, filtered in
+        // above, are untouched.
       }
       try {
         const raw = await storage.get(`${STATE_KEY_PREFIX}${grantId}`);
