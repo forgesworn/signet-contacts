@@ -209,9 +209,11 @@ already has) differs between the owner's real pairing and an attacker's forged
 one.
 
 The code flows **ONE way**: app screen → person → producer, never back the
-other direction. If Signet ALSO displayed its own code, an attacker whose
-forged ack landed first could read the owner's code straight off Signet's
-screen and publish a second forged ack to match it after the fact — the
+other direction. If Signet ALSO displayed its own code, an attacker who can
+see the owner's screen, pairing with an app that missed the real ack (kind
+21237 is ephemeral; a backgrounded app or a dropped socket loses it), could
+read the owner's code off Signet, grind a grantId/railPubkey to match, and
+publish a forged ack the app then accepts — the
 1-in-1,000,000 claim only holds while the attacker must commit to an ack
 *before* anything about the owner's code exists to copy. Keeping the code on
 one screen only is what keeps that commitment forced.

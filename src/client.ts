@@ -740,9 +740,10 @@ export function createSignetContactsClient(opts: {
       // restart). `load(grantId)` only ever replaces THIS grant's own
       // entries — with whatever is stored under its key, or with nothing if
       // there is no stored row — and leaves every other grant's rows alone.
-      pending = pending.filter((p) => p.grantId !== grantId);
       try {
         const rawPending = await storage.get(`${PENDING_KEY_PREFIX}${grantId}`);
+        // Only once the read succeeded: a throwing store keeps what is in memory.
+        pending = pending.filter((p) => p.grantId !== grantId);
         if (rawPending) {
           const parsed = JSON.parse(rawPending) as unknown;
           // A per-row shape check, not just "has the two

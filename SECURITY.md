@@ -90,8 +90,9 @@ this wire cannot promise no matter how it is implemented.
   the real ack, so the code differs between the real pairing and a forged one.
   The code flows one way ONLY — the app shows it, the person types it into
   Signet, Signet compares (`matchesPairingCode`) and never displays its own
-  (F1): if Signet also displayed a code, the attacker could read the owner's
-  off Signet's own screen and forge a second ack to match it after the fact.
+  (F1): if Signet also displayed a code, an attacker who can see the owner's
+  screen could read it and, against an app that missed the real (ephemeral)
+  ack, grind and publish a forged ack to match it after the fact.
   With the code shown on one screen only, the attacker must commit to a forged
   ack before anything about the owner's code exists to copy, so they get one
   guess, at 1-in-1,000,000 odds. See `docs/WIRE.md` §3.

@@ -16,10 +16,11 @@
  * never the other direction. The consumer (the app) shows its code. The
  * producer (Signet) MUST NOT show its own: instead it asks the person to
  * TYPE the code the app is showing (`matchesPairingCode`, below) and
- * compares it itself. If Signet displayed its own code too, an attacker
- * whose forged ack landed first — before the real one — could read the
- * owner's code straight off Signet's screen and publish a SECOND forged ack
- * to match it after the fact, turning the one-in-a-million odds into a
+ * compares it itself. If Signet displayed its own code too, an attacker who
+ * can see the owner's screen, pairing with an app that missed the real
+ * (ephemeral) ack, could read the owner's code off Signet, grind a
+ * grantId/railPubkey to match, and publish a forged ack after the fact,
+ * turning the one-in-a-million odds into a
  * near-certainty. With the code shown on only one side, the attacker has to
  * commit to a forged ack before anything about the owner's code exists to
  * copy.
@@ -54,8 +55,8 @@ export interface PairingCodeInput {
 }
 
 /**
- * Deterministic 6-digit code, e.g. `"042917"`. Both screens compute this from
- * the same four values, so a mismatch means one side has a different
+ * Deterministic 6-digit code, e.g. `"042917"`. Both sides compute this from
+ * the same four values (only the app displays it), so a mismatch means one side has a different
  * `grantId`/`railPubkey` — i.e. a different pairing — from the other.
  */
 export function pairingCode(input: PairingCodeInput): string {
