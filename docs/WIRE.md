@@ -375,6 +375,13 @@ in its own projection; the producer maps it back by recomputing
 `scopedContactId` over its own records, never by trusting an app-supplied
 producer-side id.
 
+A batch is one replaceable event per grant, so a second batch overwrites the
+first before the producer necessarily read it (B2). This SDK's own consumer
+client (`propose`) resends what is still waiting on every later call, keyed by
+the SAME `operationId` it minted the first time — a producer must therefore
+treat a repeated `operationId` as already handled, not as an error, exactly as
+the idempotency-key rule in the table above already requires.
+
 ## 6. Capabilities
 
 | Token | Description | Fields it unlocks |

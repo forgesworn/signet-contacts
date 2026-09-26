@@ -16,6 +16,18 @@
   pairing walkthrough adds the confirm step before a pairing is used for
   anything. `vectors/pairing-code.json` freezes four cases. No wire message,
   ack, projection, or QR format changed.
+- **Fix (B2): proposal resend.** Proposals ride one replaceable event per
+  grant, so a second `propose` call used to overwrite the first before Signet
+  had read it, and the client never resent — a suggestion sent while Signet
+  was offline, or between two propose calls, was silently lost. `propose` now
+  carries every still-pending proposal alongside new ones, rebuilt with its
+  original `operationId`/`action`/`value`/`createdAt` so a resend is
+  byte-identical in meaning to the first send; new proposals always come
+  first, and resends are newest-`sentAt`-first, so new suggestions are never
+  squeezed out by old stuck ones. See the `propose` doc comment
+  (`src/client.ts`) and `docs/WIRE.md`'s proposal-batch section. No wire
+  message or batch shape changed — a consumer resending an operationId a
+  producer already applied is exactly the idempotency this wire already had.
 - **Contract (docs only; no wire bytes, versions or tag derivations changed).**
   The capability-scoped v2 contract is frozen. `docs/WIRE.md` gains a per-message
   version table (§0): the app-access rail (pairing, ack, envelope, projection)

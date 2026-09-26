@@ -20,7 +20,8 @@
  * ack) and is always author-pinned before its ciphertext is even opened.
  */
 import {
-  ACK_CANDIDATE_LIMIT, ACK_KIND, PAIRING_FRESHNESS_SECONDS, isCapability,
+  ACK_CANDIDATE_LIMIT, ACK_KIND, MAX_PROPOSALS_PER_BATCH, MAX_STALENESS_SECONDS,
+  PAIRING_FRESHNESS_SECONDS, isCapability,
 } from './wire/constants.js';
 import type { Capability } from './wire/constants.js';
 import { parsePairingAckV2, pairingFromAck } from './wire/ack.js';
@@ -82,6 +83,26 @@ export interface SignetContactsClient {
   getState(): ContactsState;
   getBlockedSet(): Set<string>;
   isFresh(nowSec?: number): boolean;
+  /**
+   * B2: each call also RESENDS what is still waiting. Proposals ride one
+   * replaceable event per grant, so a second `propose` before Signet has
+   * read the first would otherwise overwrite it — and this client never
+   * polls to find out whether that happened. Every batch therefore carries
+   * the new `drafts` FIRST, then every still-`pending` entry that has not
+   * gone stale (`min(maxPendingStalenessSeconds, MAX_STALENESS_SECONDS)`),
+   * still has its capability, and is not superseded by one of the new
+   * drafts (an `add-ken` for the same pubkey, or a `rename-app-label` for
+   * the same contactId) — newest `sentAt` first, capped so new suggestions
+   * are never squeezed out of the batch by old stuck ones. A resent entry
+   * is rebuilt with its ORIGINAL `operationId`/`action`/`value`/`createdAt`
+   * (a rename's original `updatedAt` included) — byte-identical in meaning
+   * to the first send, so a producer's replay check and LWW behave exactly
+   * as they did then. On a successful publish, superseded entries are
+   * dropped from `pending` and new ones are added; a resent entry keeps its
+   * original `sentAt`. On failure `pending` is untouched. An entry pushed
+   * out of the batch by the cap is not dropped — it stays pending and ages
+   * out later via `reconcilePending`'s own staleness check, same as always.
+   */
   propose(pairing: PairingV2, drafts: readonly ContactProposalDraft[]): Promise<boolean>;
   /**
    * R-9: proposals this client has sent that it has not yet seen applied.
@@ -547,7 +568,12 @@ export function createSignetContactsClient(opts: {
 
       const createdAt = now();
       let plaintext: string;
-      let proposals: ContactProposalV1[];
+      let newProposals: ContactProposalV1[];
+      // B2: which PENDING entries a new draft supersedes — an `add-ken` for
+      // the same pubkey, or a `rename-app-label` for the same contactId.
+      // Populated inside the try below (it depends on `newProposals`) but
+      // declared here so the success branch after publish can use it too.
+      let isSuperseded: (p: PendingProposal) => boolean = () => false;
       try {
         // A rename draft with no `updatedAt` is
         // stamped from the client's OWN injected clock, not `draftToProposal`'s
@@ -558,8 +584,56 @@ export function createSignetContactsClient(opts: {
             ? { ...d, value: { ...d.value, updatedAt: nowMs() } }
             : d
         ));
-        proposals = stamped.map((d) => draftToProposal(d, pairing.grantId, createdAt));
-        plaintext = buildProposalBatch(proposals);
+        newProposals = stamped.map((d) => draftToProposal(d, pairing.grantId, createdAt));
+
+        // B2: resend everything still pending that this batch does not make
+        // redundant, so a proposal Signet never got to read (offline, or
+        // overwritten by an earlier `propose` before that first send was
+        // read) is not lost for good.
+        const supersededKenPubkeys = new Set(
+          newProposals
+            .filter((p): p is ContactProposalV1 & { value: AddKenValue } => p.action === 'add-ken')
+            .map((p) => p.value.pubkey.toLowerCase()),
+        );
+        const supersededRenameIds = new Set(
+          newProposals
+            .filter((p): p is ContactProposalV1 & { value: RenameAppLabelValue } => p.action === 'rename-app-label')
+            .map((p) => p.value.contactId),
+        );
+        isSuperseded = (p) => (
+          p.action === 'add-ken'
+            ? supersededKenPubkeys.has((p.value as AddKenValue).pubkey.toLowerCase())
+            : supersededRenameIds.has((p.value as RenameAppLabelValue).contactId)
+        );
+        // The tighter of the two staleness ceilings: a caller's own window
+        // never overrides the wire's own resend limit.
+        const maxResendAge = Math.min(maxPendingStaleness, MAX_STALENESS_SECONDS);
+        const eligible = pending.filter((p) => (
+          createdAt - p.sentAt <= maxResendAge
+          && granted.has(CAPABILITY_FOR_ACTION[p.action])
+          && !isSuperseded(p)
+        ));
+        // Newest first — `Array#sort` is stable, so entries sent in the same
+        // second keep their existing relative order. New proposals always
+        // come first in the BATCH (below), and this ordering is what keeps a
+        // fresh suggestion from being squeezed out of the cap by an old one
+        // that has been stuck since before it: only the OLDEST resend
+        // candidates are ever dropped when the budget runs out, and a
+        // dropped one is not lost — it stays `pending` and ages out later via
+        // `reconcilePending`'s own staleness check, same as always.
+        eligible.sort((a, b) => b.sentAt - a.sentAt);
+        const resendEntries = eligible.slice(0, Math.max(0, MAX_PROPOSALS_PER_BATCH - newProposals.length));
+
+        // Rebuilt with the ORIGINAL operationId/action/value/createdAt (a
+        // rename's original updatedAt included) — a resend must be
+        // byte-identical in meaning to the first send, so a producer's replay
+        // check (operationId seen) and LWW behave exactly as they did then.
+        const resendProposals = resendEntries.map((p) => ({
+          v: 1, grantId: pairing.grantId, operationId: p.operationId, action: p.action,
+          value: p.value, createdAt: p.sentAt,
+        }) as ContactProposalV1);
+
+        plaintext = buildProposalBatch([...newProposals, ...resendProposals]);
       } catch {
         return false;
       }
@@ -576,10 +650,16 @@ export function createSignetContactsClient(opts: {
       } catch {
         return false;
       }
-      // R-9: only a proposal that actually reached a relay is pending. One that
-      // never got out is not "waiting for the owner", it is "not sent".
+      // R-9: only a batch that actually reached a relay changes `pending` —
+      // one that never got out is not "waiting for the owner", it is "not
+      // sent", and a resend that never sent must not be treated as handled.
       if (ok) {
-        for (const proposal of proposals) {
+        // Superseded entries are dropped; a resent entry is untouched here
+        // (same object, same `sentAt`) because it is not superseded by
+        // construction (`eligible` already excluded superseded rows) —
+        // filtering on `isSuperseded` alone is enough to leave it in place.
+        pending = pending.filter((p) => !isSuperseded(p));
+        for (const proposal of newProposals) {
           pending.push({
             operationId: proposal.operationId, action: proposal.action,
             value: proposal.value, sentAt: createdAt,
