@@ -2,8 +2,10 @@
  * Identifiers and routing tags.
  *
  * Every tag is a domain-separated SHA-256 truncated to 128 bits (32 hex). The
- * prefixes are what stop one grant's tag being computable as another's, and
- * what stops a projection tag ever equalling a proposal tag for the same grant.
+ * prefixes (`proj:`/`prop:`/`cid:`/`ack:`) are what stop one grant's tag
+ * being computable as another's, and what stops a projection tag ever
+ * equalling a proposal, scoped-contact-id or ack tag for the same grant or
+ * challenge.
  *
  * Tags are OPAQUE on the relay by design (exploration §7): a scraper of kind
  * 30078 sees a random-looking `d` tag, not `signet:contacts:<something>`, so
@@ -19,6 +21,7 @@ import { bytesToHex } from '@noble/hashes/utils.js';
 const PROJECTION_PREFIX = 'signet:contacts:proj:';
 const PROPOSAL_PREFIX = 'signet:contacts:prop:';
 const SCOPED_PREFIX = 'signet:contacts:cid:';
+const ACK_PREFIX = 'signet:contacts:ack:';
 const TAG_HEX_CHARS = 32;
 
 /**
@@ -50,6 +53,20 @@ export function projectionTag(grantId: string): string {
  *  replaceable event. */
 export function proposalTag(grantId: string, appPubkey: string): string {
   return digestHex(`${PROPOSAL_PREFIX}${grantId}:${appPubkey}`).slice(0, TAG_HEX_CHARS);
+}
+
+/**
+ * Replaceable `d` tag of the STORED (kind `ACK_STORED_KIND`) copy of a
+ * pairing ack, keyed on the consumer's own anti-replay `challenge` — not on
+ * `grantId`, which does not exist yet when the app starts waiting for its
+ * ack. Lowercased before hashing, matching the byte-for-byte challenge
+ * comparison `parsePairingAckV2` itself does on the challenge FIELD (this is
+ * a routing tag, not that comparison, so case-folding it here is safe and is
+ * what lets a consumer compute the same tag regardless of how the QR's
+ * `challenge=` query parameter happened to be cased).
+ */
+export function ackTag(challenge: string): string {
+  return digestHex(`${ACK_PREFIX}${challenge.toLowerCase()}`).slice(0, TAG_HEX_CHARS);
 }
 
 /**

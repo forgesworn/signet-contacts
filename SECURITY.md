@@ -96,6 +96,35 @@ this wire cannot promise no matter how it is implemented.
   With the code shown on one screen only, the attacker must commit to a forged
   ack before anything about the owner's code exists to copy, so they get one
   guess, at 1-in-1,000,000 odds. See `docs/WIRE.md` §3.
+
+  A STORED copy of the ack (kind 30078, `d` = `ackTag(challenge)`, NIP-40
+  `expiration` at `created_at + PAIRING_FRESHNESS_SECONDS`) now exists
+  alongside the ephemeral kind-21237 one, so a consumer whose app was
+  backgrounded through the ephemeral event's whole life can still poll it up.
+  This does NOT weaken the argument above — it rests on the owner's device
+  never displaying its own code, not on the ack being hard to retrieve — but
+  it does mean a stored junk event from someone who photographed the QR now
+  persists on a relay for that window too, rather than vanishing the instant
+  no live subscriber caught it. Bounded the same way the ephemeral flood
+  already was — the per-challenge `#d` filter (junk still needs the
+  challenge, which the QR itself shows) and the 32-candidate attempted cap —
+  plus a NEW bound the stored copy needed on its own: a flood of more than
+  `ACK_CANDIDATE_LIMIT` newer junk events could otherwise crowd the genuine
+  (older) stored ack out of every page a poll asks for, so `awaitPairingAck`
+  pages backward in time with `until` once a full page comes back entirely
+  already-seen, capped at a small number of pages per poll.
+
+  Retention has one further consequence worth naming: unlike the ephemeral
+  event, this one is designed to be READ BACK later, and (should a relay
+  ignore the NIP-40 expiry it is asked to honour) may in practice sit there
+  longer than intended. If the app's own key leaks at some point after
+  pairing, a still-present stored ack reveals that ONE grant's history —
+  `grantId`, `railPubkey`, `relay`, the projection/proposal tags, and the
+  granted capabilities — to whoever holds the leaked key. This adds only
+  HISTORY, not new access: a leaked app key already opens every projection
+  the app was ever granted, ack retained or not, so the marginal exposure is
+  metadata about a pairing that already happened, not a new decrypt
+  capability.
 - **S9 — the rendezvous relay is chosen by the app being paired.** The pairing
   URI names the relay the ack is published to, so approving a grant makes the
   owner's device dial a host the requesting app picked; it is validated for

@@ -1,12 +1,16 @@
 import { describe, it, expect, vi } from 'vitest';
 import { createSignetContactsClient, createMemoryStorage } from './client.js';
 import type { ContactsSigner, RelayIo } from './client.js';
-import { buildPairingAckV2, ackEventTemplate } from './wire/ack.js';
+import { buildPairingAckV2, ackEventTemplate, storedAckEventTemplate } from './wire/ack.js';
 import { MAX_ENVELOPE_CHARS, sealVaultPayload } from './wire/envelope.js';
 import { buildProjection, projectionEventTemplate } from './wire/projection.js';
 import { parseProposalBatch } from './wire/proposal.js';
-import { projectionTag, proposalTag } from './wire/ids.js';
-import { ACK_CANDIDATE_LIMIT, MAX_PROPOSALS_PER_BATCH, MAX_STALENESS_SECONDS, PAIRING_FRESHNESS_SECONDS } from './wire/constants.js';
+import { ackTag, projectionTag, proposalTag } from './wire/ids.js';
+import {
+  ACK_CANDIDATE_LIMIT, ACK_KIND, ACK_STORED_KIND, MAX_PROPOSALS_PER_BATCH, MAX_STALENESS_SECONDS,
+  PAIRING_FRESHNESS_SECONDS,
+} from './wire/constants.js';
+import type { NostrFilterLike } from './wire/types.js';
 import type { ContactProjectionV2, PairingV2, PendingProposal, SignedNostrEvent } from './wire/types.js';
 
 const GRANT = 'f'.repeat(32);
@@ -306,6 +310,238 @@ describe('awaitPairingAck', () => {
     });
     const pairing = await client.awaitPairingAck({ challenge: CHALLENGE, relays: RELAYS, timeoutMs: 30, pollMs: 10 });
     expect(pairing).toBeNull();
+  });
+
+  // B4: the stored (kind 30078) copy of the ack exists so a consumer app
+  // that was backgrounded through the ephemeral ack's whole life can still
+  // find it by polling. No live event at all here — only `fetchMany`/
+  // `fetchNewest` polling turns it up.
+  it('resolves from a STORED ack found only by polling — the backgrounded-app case', async () => {
+    const signer = fakeSigner();
+    const ackPlain = buildPairingAckV2({
+      v: 2, grantId: GRANT, railPubkey: RAIL,
+      projectionTag: projectionTag(GRANT), proposalTag: proposalTag(GRANT, APP),
+      relay: RELAYS[0]!, grantedCapabilities: ['signet.contacts.read:directory'],
+      maxStalenessSeconds: 21600, challenge: CHALLENGE,
+    });
+    const content = await signer.nip44Encrypt(APP, ackPlain);
+    const storedEvent = {
+      ...storedAckEventTemplate('9'.repeat(64), APP, 1_700_000_000, content, CHALLENGE),
+      id: '4'.repeat(64), sig: '5'.repeat(128),
+    };
+    const client = createSignetContactsClient({
+      signer,
+      relay: {
+        // No `subscribe` at all — nothing is EVER pushed live, so the only
+        // way to find this ack is a poll matching the stored filter's kind
+        // and `#d` tag.
+        fetchNewest: async (filter) => {
+          const f = filter as NostrFilterLike;
+          if (Array.isArray(f.kinds) && f.kinds.includes(ACK_STORED_KIND)) return storedEvent;
+          return null;
+        },
+        publish: async () => true,
+      },
+      now: () => 1_700_000_000,
+    });
+    const pairing = await client.awaitPairingAck({ challenge: CHALLENGE, relays: RELAYS, timeoutMs: 50, pollMs: 5 });
+    expect(pairing?.grantId).toBe(GRANT);
+  });
+
+  // Item 2 (security review): crowding mitigation. A photographed QR lets an
+  // attacker flood the STORED ack tag with junk. If `ACK_CANDIDATE_LIMIT`
+  // (10) or more newer junk events sit in front of the genuine (older) ack,
+  // a poll that only ever asks for the newest page would never see it. The
+  // fix pages backward with `until` once a full page comes back entirely
+  // already-`attempted`.
+  it('pages back past a crowd of newer junk stored acks to reach an older genuine one (crowding)', async () => {
+    const signer = fakeSigner();
+    const BASE = 1_700_000_000;
+    const ackPlain = buildPairingAckV2({
+      v: 2, grantId: GRANT, railPubkey: RAIL,
+      projectionTag: projectionTag(GRANT), proposalTag: proposalTag(GRANT, APP),
+      relay: RELAYS[0]!, grantedCapabilities: ['signet.contacts.read:directory'],
+      maxStalenessSeconds: 21600, challenge: CHALLENGE,
+    });
+    const genuineContent = await signer.nip44Encrypt(APP, ackPlain);
+    // 10 newer junk events (undecryptable), newest first: BASE, BASE-1, ..., BASE-9.
+    const junk: SignedNostrEvent[] = Array.from({ length: ACK_CANDIDATE_LIMIT }, (_, i) => ({
+      ...storedAckEventTemplate('7'.repeat(64), APP, BASE - i, 'not even JSON, always fails to decrypt', CHALLENGE),
+      id: String(i).padStart(64, '0'), sig: '5'.repeat(128),
+    }));
+    // One older genuine ack, reachable only by paging past the whole junk page.
+    const genuine: SignedNostrEvent = {
+      ...storedAckEventTemplate('9'.repeat(64), APP, BASE - 15, genuineContent, CHALLENGE),
+      id: '8'.repeat(64), sig: '5'.repeat(128),
+    };
+    const allStored = [...junk, genuine];
+    const fetchMany = vi.fn(async (filter: NostrFilterLike) => {
+      if (!Array.isArray(filter.kinds) || !filter.kinds.includes(ACK_STORED_KIND)) return [];
+      const until = typeof filter.until === 'number' ? filter.until : Number.POSITIVE_INFINITY;
+      return allStored
+        .filter((e) => e.created_at <= until)
+        .sort((a, b) => b.created_at - a.created_at)
+        .slice(0, ACK_CANDIDATE_LIMIT);
+    });
+    const client = createSignetContactsClient({
+      signer,
+      relay: { fetchNewest: async () => null, fetchMany, publish: async () => true },
+      now: () => BASE,
+    });
+    const pairing = await client.awaitPairingAck({ challenge: CHALLENGE, relays: RELAYS, timeoutMs: 200, pollMs: 5 });
+    expect(pairing?.grantId).toBe(GRANT);
+    // Proves paging actually ran, not just that several outer-loop polls happened.
+    const pagedCalls = fetchMany.mock.calls.filter(([f]) => typeof (f as NostrFilterLike).until === 'number');
+    expect(pagedCalls.length).toBeGreaterThan(0);
+  });
+
+  it('still resolves from an ephemeral LIVE ack, unaffected by the stored filter', async () => {
+    const signer = fakeSigner();
+    let receiveEphemeral!: (event: SignedNostrEvent) => void;
+    const content = await signer.nip44Encrypt(APP, buildPairingAckV2({
+      v: 2, grantId: GRANT, railPubkey: RAIL, projectionTag: projectionTag(GRANT),
+      proposalTag: proposalTag(GRANT, APP), relay: RELAYS[0]!,
+      grantedCapabilities: ['signet.contacts.read:directory'], maxStalenessSeconds: 21600,
+      challenge: CHALLENGE,
+    }));
+    const client = createSignetContactsClient({
+      signer,
+      now: () => 1_700_000_000,
+      relay: {
+        fetchNewest: async () => null,
+        publish: async () => true,
+        subscribe: (filter, _relays, callback) => {
+          const f = filter as NostrFilterLike;
+          if (Array.isArray(f.kinds) && f.kinds.includes(ACK_KIND)) receiveEphemeral = callback;
+          return () => {};
+        },
+      },
+    });
+    const waiting = client.awaitPairingAck({ challenge: CHALLENGE, relays: RELAYS, pollMs: 10_000 });
+    await Promise.resolve(); await Promise.resolve();
+    receiveEphemeral({
+      ...ackEventTemplate('9'.repeat(64), APP, 1_700_000_000, content), id: '4'.repeat(64), sig: '5'.repeat(128),
+    });
+    expect((await waiting)?.grantId).toBe(GRANT);
+  });
+
+  it('queries the stored ack with kind 30078 and the ack\'s own #d tag, never merged with the ephemeral filter', async () => {
+    const filters: NostrFilterLike[] = [];
+    const client = createSignetContactsClient({
+      signer: fakeSigner(),
+      relay: {
+        fetchNewest: async (filter) => { filters.push(filter as NostrFilterLike); return null; },
+        publish: async () => true,
+      },
+    });
+    await client.awaitPairingAck({ challenge: CHALLENGE, relays: RELAYS, timeoutMs: 5, pollMs: 5 });
+    const storedFilter = filters.find((f) => Array.isArray(f.kinds) && f.kinds.includes(ACK_STORED_KIND));
+    expect(storedFilter).toBeDefined();
+    // Exactly kind 30078 — never combined with 21237 in one filter, and
+    // never merged with a projection's own filter shape (`#p`, not `#d`).
+    expect(storedFilter?.kinds).toEqual([ACK_STORED_KIND]);
+    expect(storedFilter?.['#d']).toEqual([ackTag(CHALLENGE)]);
+    expect(storedFilter?.['#p']).toBeUndefined();
+    expect(storedFilter?.limit).toBe(ACK_CANDIDATE_LIMIT);
+
+    const ephemeralFilter = filters.find((f) => Array.isArray(f.kinds) && f.kinds.includes(ACK_KIND));
+    expect(ephemeralFilter).toBeDefined();
+    expect(ephemeralFilter?.kinds).toEqual([ACK_KIND]);
+  });
+
+  // Security review fix: the producer accepts the pairing link until
+  // t+PAIRING_FRESHNESS_SECONDS and the stored ack lives until its own
+  // created_at+PAIRING_FRESHNESS_SECONDS — a second window after the first —
+  // so the default now covers both in sequence.
+  it('defaults timeoutMs to 2 * PAIRING_FRESHNESS_SECONDS * 1000 (600s)', async () => {
+    vi.useFakeTimers();
+    try {
+      const DEFAULT_TIMEOUT_MS = 2 * PAIRING_FRESHNESS_SECONDS * 1000;
+      const fetchNewest = vi.fn(async () => null);
+      const client = createSignetContactsClient({
+        signer: fakeSigner(), relay: { fetchNewest, publish: async () => true },
+      });
+      const waiting = client.awaitPairingAck({ challenge: CHALLENGE, relays: RELAYS, pollMs: 10_000 });
+      // Just under the default deadline: still polling.
+      await vi.advanceTimersByTimeAsync(DEFAULT_TIMEOUT_MS - 1_000);
+      expect(fetchNewest.mock.calls.length).toBeGreaterThan(0);
+      // Past the default deadline: the loop must have stopped and resolved
+      // — after one final poll pass (the resume-after-deadline fix: a poll
+      // always runs before the deadline/abort/cap check).
+      await vi.advanceTimersByTimeAsync(20_000);
+      expect(await waiting).toBeNull();
+      // No further polling after the loop has returned.
+      const callsAfterReturn = fetchNewest.mock.calls.length;
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(fetchNewest.mock.calls.length).toBe(callsAfterReturn);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // Item 1 (security review): a backgrounded app's timer can fire LATE — its
+  // real wake-up may land after `deadline` has already elapsed in wall-clock
+  // terms. The fix is that every loop iteration polls FIRST and only then
+  // checks the deadline, so a late wake still gets one more look at the
+  // relays. Simulated here by jumping the fake clock straight past the
+  // deadline WITHOUT letting the pending sleep timer fire, making the stored
+  // ack available only after that jump, and then firing the (now overdue)
+  // timer — the resolution proves the poll-after-jump actually happened.
+  it('resumes from a frozen/late timer and still finds a stored ack that arrived while suspended', async () => {
+    vi.useFakeTimers();
+    try {
+      const signer = fakeSigner();
+      const ackPlain = buildPairingAckV2({
+        v: 2, grantId: GRANT, railPubkey: RAIL,
+        projectionTag: projectionTag(GRANT), proposalTag: proposalTag(GRANT, APP),
+        relay: RELAYS[0]!, grantedCapabilities: ['signet.contacts.read:directory'],
+        maxStalenessSeconds: 21600, challenge: CHALLENGE,
+      });
+      const content = await signer.nip44Encrypt(APP, ackPlain);
+      let ackAvailable = false;
+      const client = createSignetContactsClient({
+        signer,
+        // `now()` must track the faked wall clock, or the ack's freshness
+        // check (judged against the carrier event's `created_at`) fails
+        // once we jump the clock far into the future.
+        now: () => Math.floor(Date.now() / 1000),
+        relay: {
+          fetchNewest: async (filter) => {
+            const f = filter as NostrFilterLike;
+            if (!ackAvailable || !Array.isArray(f.kinds) || !f.kinds.includes(ACK_STORED_KIND)) return null;
+            return {
+              ...storedAckEventTemplate('9'.repeat(64), APP, Math.floor(Date.now() / 1000), content, CHALLENGE),
+              id: '4'.repeat(64), sig: '5'.repeat(128),
+            };
+          },
+          publish: async () => true,
+        },
+      });
+      const pollMs = 10_000;
+      const waiting = client.awaitPairingAck({ challenge: CHALLENGE, relays: RELAYS, pollMs });
+      // Flush the very first (immediate) poll pass so the first sleep timer
+      // gets scheduled.
+      await vi.advanceTimersByTimeAsync(0);
+      // Freeze: jump the clock WAY past the default deadline (600s) without
+      // firing the pending timer — `setSystemTime` alone does not run
+      // callbacks, which is exactly the "suspended, not ticking" simulation.
+      const frozenUntil = Date.now() + 2 * PAIRING_FRESHNESS_SECONDS * 1000 + 60_000;
+      vi.setSystemTime(frozenUntil);
+      // The ack "arrives" while the app was suspended.
+      ackAvailable = true;
+      // Now let the overdue timer fire. `Date.now()` already reports a time
+      // past `deadline`; with the fix, the loop still polls once more before
+      // checking that and finds the now-available stored ack.
+      // (`runOnlyPendingTimersAsync`, not `advanceTimersByTimeAsync(0)`: a
+      // timer already overdue relative to a `setSystemTime` jump is not
+      // caught by a zero-length tick — it only fires once the fake clock is
+      // told to actually advance to or past it, or run pending timers
+      // directly.)
+      await vi.runOnlyPendingTimersAsync();
+      expect((await waiting)?.grantId).toBe(GRANT);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 
@@ -1431,7 +1667,9 @@ describe('ephemeral pairing acknowledgements', () => {
     await Promise.resolve(); await Promise.resolve();
     receive({ ...ackEventTemplate('9'.repeat(64), APP, 1700000000, content), id: '4'.repeat(64), sig: '5'.repeat(128) });
     expect((await waiting)?.grantId).toBe(GRANT);
-    expect(stopped).toHaveBeenCalledOnce();
+    // Two live subscriptions now (ephemeral kind 21237 + stored kind 30078),
+    // both handed the SAME mock `stop` here, so teardown calls it twice.
+    expect(stopped).toHaveBeenCalledTimes(2);
   });
   it('cancels a waiting live listener without accepting a late acknowledgement', async () => {
     const controller = new AbortController(), stopped = vi.fn(), signer = fakeSigner();
@@ -1439,7 +1677,9 @@ describe('ephemeral pairing acknowledgements', () => {
       publish: async () => true, subscribe: () => stopped } });
     const waiting = client.awaitPairingAck({ challenge: CHALLENGE, relays: RELAYS, signal: controller.signal });
     controller.abort();
-    expect(await waiting).toBeNull(); expect(stopped).toHaveBeenCalledOnce();
+    expect(await waiting).toBeNull();
+    // Both the ephemeral and the stored subscription are torn down.
+    expect(stopped).toHaveBeenCalledTimes(2);
   });
   it('limits identity decryption to 32 unique candidates for one pairing attempt', async () => {
     const signer = fakeSigner(); signer.nip44Decrypt = vi.fn(async () => { throw new Error('not our ack'); });

@@ -130,7 +130,12 @@ describe('README.md — storage, options and the persistence contract (C-I1, C-I
     ]) {
       expect(readme).toContain(option);
     }
-    for (const dflt of ['604800', '120000', '2000', '60000', '8000']) {
+    // `timeoutMs`'s default moved 120000 -> 300000 -> 600000
+    // (`2 * PAIRING_FRESHNESS_SECONDS * 1000`): the producer accepts the
+    // pairing link until t+PAIRING_FRESHNESS_SECONDS and the stored ack
+    // lives until its own created_at+PAIRING_FRESHNESS_SECONDS — a second
+    // window after the first, so the consumer's own wait covers both.
+    for (const dflt of ['604800', '600000', '2000', '60000', '8000']) {
       expect(readme).toContain(dflt);
     }
   });

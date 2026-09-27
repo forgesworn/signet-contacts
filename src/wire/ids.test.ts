@@ -1,8 +1,9 @@
 import { describe, it, expect } from 'vitest';
-import { projectionTag, proposalTag, scopedContactId, isHex, randomHex, sanitizeWireText } from './ids.js';
+import { projectionTag, proposalTag, scopedContactId, isHex, randomHex, sanitizeWireText, ackTag } from './ids.js';
 
 const GRANT = 'f'.repeat(32);
 const APP = 'a'.repeat(64);
+const CHALLENGE = 'D'.repeat(32);
 
 describe('routing tags', () => {
   it('are 32 lowercase hex and deterministic', () => {
@@ -24,6 +25,31 @@ describe('routing tags', () => {
     // an accompanying wire major bump; consumers key their storage off these.
     expect(projectionTag(GRANT)).toBe('5d65155161ef7e713af3bf7bc7b213d0');
     expect(proposalTag(GRANT, APP)).toBe('2713fc461de3b92ac3da773f33926f3d');
+  });
+});
+
+describe('ackTag', () => {
+  it('is 32 lowercase hex and deterministic', () => {
+    const tag = ackTag(CHALLENGE);
+    expect(tag).toMatch(/^[0-9a-f]{32}$/);
+    expect(ackTag(CHALLENGE)).toBe(tag);
+  });
+
+  it('normalises case before hashing, so an upper- and lower-case challenge share one tag', () => {
+    expect(ackTag(CHALLENGE)).toBe(ackTag(CHALLENGE.toLowerCase()));
+  });
+
+  it('is domain-separated: an ack tag is never a projection or proposal tag', () => {
+    // CHALLENGE and GRANT are both 32 hex chars, so this also proves the
+    // ACK_PREFIX (not just the input) is what keeps the spaces disjoint.
+    expect(ackTag(GRANT)).not.toBe(projectionTag(GRANT));
+    expect(ackTag(GRANT)).not.toBe(proposalTag(GRANT, APP));
+  });
+
+  it('pins the exact frozen digest', () => {
+    // sha256('signet:contacts:ack:' + CHALLENGE.toLowerCase()).slice(0,32)
+    // — regenerate ONLY with an accompanying wire major bump.
+    expect(ackTag(CHALLENGE)).toBe('630f26ef0b0b835998967c711cb7c390');
   });
 });
 

@@ -133,7 +133,7 @@ set with it.
 |---|---|---|
 | `challenge` | — | required; your own nonce, exactly 32 hex characters |
 | `relays` | — | required; where the ack is expected |
-| `timeoutMs` | `120000` | how long the QR stays worth showing before `null` |
+| `timeoutMs` | `600000` (`2 * PAIRING_FRESHNESS_SECONDS * 1000`) | how long the QR stays worth showing before `null` |
 | `pollMs` | `2000` | how often the relays are asked while waiting |
 | `requestedCapabilities` | unset | your own request, so an over-granting ack is refused |
 
@@ -188,9 +188,19 @@ the grant was revoked: `client.getBlockedSet()` is sticky and ignores both.
 
 MIT.
 
-Pairing acknowledgements use ephemeral kind 21237. Supply `RelayIo.subscribe`
-(the bundled adapter does) so `awaitPairingAck` listens throughout the approval
-window; polling alone can miss an approval between queries. Pass an `AbortSignal`
-as `signal` to cancel that listener when the pairing UI closes. One attempt
-opens at most 32 distinct candidate ciphertexts, deduplicated by event ID; after
-that it returns `null` and requires a new explicit attempt.
+Pairing acknowledgements use ephemeral kind 21237, plus a STORED copy of the
+same content as a replaceable kind-30078 event (`d` = `ackTag(challenge)`,
+NIP-40-expired), so a consumer app that was backgrounded through the
+ephemeral event's whole life can still find it by polling — see `docs/WIRE.md`
+"Ack delivery". Supply `RelayIo.subscribe` (the bundled adapter does) so
+`awaitPairingAck` listens throughout the approval window on both filters;
+polling alone can miss an approval between queries. Pass an `AbortSignal` as
+`signal` to cancel that listener when the pairing UI closes. One attempt opens
+at most 32 distinct candidate ciphertexts, deduplicated by event ID; after
+that it returns `null` and requires a new explicit attempt. A crowd of more
+than `ACK_CANDIDATE_LIMIT` newer junk stored acks (a photographed QR lets
+anyone publish these) is paged past with `until`, up to a few pages per poll,
+so an older genuine ack behind the crowd is still reachable. Every poll runs
+BEFORE the timeout/abort/cap check that can end the wait, so a resumed
+(e.g. backgrounded) app still gets one more look at the relays even if real
+time has already run past `timeoutMs` while it was suspended.

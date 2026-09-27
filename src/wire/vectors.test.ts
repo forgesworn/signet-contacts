@@ -4,7 +4,7 @@ import { buildPairingUriV2, parsePairingRequestV2 } from './pairing.js';
 import { buildPairingAckV2, parsePairingAckV2 } from './ack.js';
 import { buildProjection, parseProjection } from './projection.js';
 import { buildProposalBatch, parseProposalBatch } from './proposal.js';
-import { projectionTag, proposalTag, scopedContactId, sanitizeWireText } from './ids.js';
+import { ackTag, projectionTag, proposalTag, scopedContactId, sanitizeWireText } from './ids.js';
 import { pairingCode } from './pairing-code.js';
 import { MAX_DISPLAY_NAME } from './constants.js';
 import type { ContactProjectionV2, ContactProposalV1, PairingAckV2 } from './types.js';
@@ -89,7 +89,7 @@ describe('vectors', () => {
         v1Plaintext: '{"v":1,"railPubkey":"' + RAIL + '","dTag":"signet:companion-rail","snapshotRelay":"wss://relay.example.com","grantedScope":{"tiers":["kin"],"personas":"all"},"challenge":"' + CHALLENGE + '"}',
         wrongChallenge: 'E'.repeat(32),
       },
-      tags: { projectionTag: projectionTag(GRANT), proposalTag: proposalTag(GRANT, APP) },
+      tags: { projectionTag: projectionTag(GRANT), proposalTag: proposalTag(GRANT, APP), ackTag: ackTag(CHALLENGE) },
     });
   });
 
