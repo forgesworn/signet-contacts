@@ -23,6 +23,7 @@ negotiated.
 |---|---|---|---|---|---|
 | Pairing URI | `v=2` (query string) | QR code or link, not an event | — | — | §3; `src/wire/pairing.ts` |
 | Pairing ack | `2` | kind `21237`, ephemeral key → app, NIP-44 | `["p", appPubkey]` | readable (the app pubkey is already public in the QR) | §3, §5; `src/wire/ack.ts` |
+| Pairing ack, stored copy | `2` (same plaintext as the row above) | kind `30078`, ephemeral key → app, NIP-44, NIP-40 `expiration` | `d` = `ackTag(challenge)` | **hashed** | §3, §5; `src/wire/ack.ts` |
 | Vault envelope | `2` | the projection event's `content` | — | — | §1; `src/wire/envelope.ts` |
 | Projection body | `2` | kind `30078`, rail → app, inside the vault envelope | `d` = `projectionTag(grantId)` | **hashed** | §5; `src/wire/projection.ts` |
 | Proposal batch, and each proposal in it | `1` | kind `30078`, app → rail, NIP-44 | `d` = `proposalTag(grantId, appPubkey)` | **hashed** | §5; `src/wire/proposal.ts` |
@@ -110,17 +111,24 @@ regeneration). Its `railSecretKey`/`appSecretKey` are fixed **test keys only**
 | Event | Kind | Author | `d` tag | `#p` tag | Encryption direction |
 |---|---|---|---|---|---|
 | Pairing ack | `21237` | a throwaway **ephemeral** key, never the owner's or the rail's | — | `["p", appPubkey]` | ephemeral → app (NIP-44, plain — no vault envelope) |
+| Pairing ack, stored copy | `30078` | the SAME throwaway **ephemeral** key as the row above | `ackTag(challenge)` | `["p", appPubkey]` | ephemeral → app (NIP-44, plain — no vault envelope); NIP-40 `expiration` at `created_at + PAIRING_FRESHNESS_SECONDS` |
 | Projection | `30078` | the grant's **rail** key | `projectionTag(grantId)` | none | rail → app (NIP-44, v2 vault envelope) |
 | Proposal | `30078` | the **app**'s own key | `proposalTag(grantId, appPubkey)` | none | app → rail (NIP-44, plain — no vault envelope) |
 
-Both replaceable kind-30078 events carry no `#p` tag on purpose: the recipient
-of a projection, and the size of the directory behind it, both stay off the
-wire (Kenspeckle v1 precedent). Only the ack — addressed to a specific app so
-it can find it — carries a `p` tag, and it is discarded (an ephemeral key is
-never author-pinnable; see S7 in `SECURITY.md`).
+The two REPLACEABLE kind-30078 events a producer signs with its own long-lived
+key (projection, proposal) carry no `#p` tag on purpose: the recipient of a
+projection, and the size of the directory behind it, both stay off the wire
+(Kenspeckle v1 precedent). The ack — both the ephemeral carrier and its stored
+copy — is addressed to a specific app so it can find it, and carries a `p`
+tag; the key that signs it is discarded either way (an ephemeral key is never
+author-pinnable; see S7 in `SECURITY.md`).
 
-Only the projection goes through the vault envelope of §1. The ack and the
-proposal are ordinary NIP-44 payloads.
+Only the projection goes through the vault envelope of §1. The ack (both
+copies) and the proposal are ordinary NIP-44 payloads.
+
+Producers **SHOULD** publish both the ephemeral 21237 ack and the stored
+30078 copy, with identical `content` — the stored copy exists purely as a
+retrieval fallback, and a consumer reads both (§ "Ack delivery" below).
 
 ## 3. Pairing URI
 
@@ -166,12 +174,28 @@ implementation should hard-code. A consumer building a desktop-to-phone handoff
 wants the web carrier: take `buildPairingUri`'s output, keep the query string,
 and put it behind the https URL Signet publishes, with `pair=1` added.
 
-### Ack delivery — several candidates, never one (I3)
+### Ack delivery — several candidates, never one (I3), and a stored fallback
 
 A consumer waiting for its ack asks for up to **`ACK_CANDIDATE_LIMIT` = 10**
 kind-21237 events tagged `["p", appPubkey]`, takes them newest first, and
 accepts the first that both decrypts under its own key and echoes its own
 `challenge`. Every other candidate costs one failed decrypt and nothing else.
+
+**A backgrounded consumer never sees the ephemeral event at all.** Kind 21237
+is ephemeral — relays don't store it — and a consumer app whose socket is
+frozen while backgrounded (the common case on some phones once the OS
+suspends a WebView's network access) is simply not connected for the moment
+the owner approves. Live subscription and polling both need the event to
+still exist to find it, and an ephemeral kind never does after the fact.
+`awaitPairingAck` therefore ALSO subscribes to and polls a second filter, `{
+kinds: [30078], '#d': [ackTag(challenge)], limit: ACK_CANDIDATE_LIMIT }`, for
+the STORED copy of the same ack (identical plaintext, different event id) —
+this is a SEPARATE filter, never merged into one `kinds: [21237, 30078]` +
+`#p` query, because a kind-30078 event addressed to this app's pubkey is also
+how a projection is shaped, and a combined filter would pull those in too.
+A consumer resumed from the background can find the stored copy on its very
+first poll after reconnecting, even though it missed the ephemeral event's
+entire lifetime.
 
 This is not an optimisation. The app pubkey and the rendezvous relay are both
 printed in the QR code the consumer displays on screen, and the ack is carried
@@ -210,13 +234,29 @@ one.
 
 The code flows **ONE way**: app screen → person → producer, never back the
 other direction. If Signet ALSO displayed its own code, an attacker who can
-see the owner's screen, pairing with an app that missed the real ack (kind
-21237 is ephemeral; a backgrounded app or a dropped socket loses it), could
-read the owner's code off Signet, grind a grantId/railPubkey to match, and
-publish a forged ack the app then accepts — the
-1-in-1,000,000 claim only holds while the attacker must commit to an ack
-*before* anything about the owner's code exists to copy. Keeping the code on
-one screen only is what keeps that commitment forced.
+see the owner's screen, pairing with an app that missed the real ack (the
+ephemeral kind-21237 event is gone the instant no live subscriber caught it —
+the stored kind-30078 copy is what now lets such an app recover, over the
+following few minutes, rather than never), could read the owner's code off
+Signet, grind a grantId/railPubkey to match, and publish a forged ack the app
+then accepts — the 1-in-1,000,000 claim only holds while the attacker must
+commit to an ack *before* anything about the owner's code exists to copy.
+Keeping the code on one screen only is what keeps that commitment forced.
+
+**The stored copy does not change this argument.** The one-way rule rests on
+the owner's device never displaying the code at all — not on the ack being
+unretrievable — so a consumer that can now fetch its ack a few minutes later
+is no more able to grind a forged one than it was before; the code is still
+computed from `grantId`/`railPubkey`, which exist only inside a real ack,
+stored or ephemeral. The new consideration the stored copy DOES introduce is
+that a photographed QR's junk isn't limited to a denial-of-service window
+any more: a stored junk event addressed to the app also now persists for
+`PAIRING_FRESHNESS_SECONDS`, rather than expiring the instant no one is
+listening. That is bounded the same three ways the ephemeral flood already
+was — the per-challenge `#d` filter (junk still has to know the challenge,
+which is exactly what the QR shows), `ACK_CANDIDATE_LIMIT`, and the 32-decrypt
+attempted-candidate cap — so it costs a bounded number of failed decrypts, not
+an unbounded relay-side accumulation.
 
 A consumer:
 

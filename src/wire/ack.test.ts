@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
-import { buildPairingAckV2, parsePairingAckV2, ackEventTemplate, pairingFromAck } from './ack.js';
-import { projectionTag, proposalTag } from './ids.js';
-import { ACK_KIND } from './constants.js';
+import { buildPairingAckV2, parsePairingAckV2, ackEventTemplate, storedAckEventTemplate, pairingFromAck } from './ack.js';
+import { ackTag, projectionTag, proposalTag } from './ids.js';
+import { ACK_KIND, ACK_STORED_KIND, PAIRING_FRESHNESS_SECONDS } from './constants.js';
 import type { PairingAckV2 } from './types.js';
 
 const GRANT = 'f'.repeat(32);
@@ -70,6 +70,35 @@ describe('ackEventTemplate', () => {
     expect(tmpl.kind).toBe(ACK_KIND);
     expect(tmpl.tags).toEqual([['p', APP]]);
     expect(tmpl.pubkey).toBe('c'.repeat(64));
+  });
+});
+
+describe('storedAckEventTemplate', () => {
+  it('is kind 30078, tagged with the ack tag, the app, and a NIP-40 expiration', () => {
+    const createdAt = 1_700_000_000;
+    const tmpl = storedAckEventTemplate('c'.repeat(64), APP, createdAt, 'ciphertext', CHALLENGE);
+    expect(tmpl.kind).toBe(ACK_STORED_KIND);
+    expect(tmpl.pubkey).toBe('c'.repeat(64));
+    expect(tmpl.created_at).toBe(createdAt);
+    expect(tmpl.content).toBe('ciphertext');
+    expect(tmpl.tags).toEqual([
+      ['d', ackTag(CHALLENGE)],
+      ['p', APP],
+      ['expiration', String(createdAt + PAIRING_FRESHNESS_SECONDS)],
+    ]);
+  });
+
+  it('shares the same content as the ephemeral carrier for the same ack', () => {
+    const ephemeral = ackEventTemplate('c'.repeat(64), APP, 1_700_000_000, 'ciphertext');
+    const stored = storedAckEventTemplate('c'.repeat(64), APP, 1_700_000_000, 'ciphertext', CHALLENGE);
+    expect(stored.content).toBe(ephemeral.content);
+    expect(stored.kind).not.toBe(ephemeral.kind);
+  });
+
+  it('normalises the challenge case the same way ackTag does', () => {
+    const upper = storedAckEventTemplate('c'.repeat(64), APP, 1_700_000_000, 'ciphertext', CHALLENGE);
+    const lower = storedAckEventTemplate('c'.repeat(64), APP, 1_700_000_000, 'ciphertext', CHALLENGE.toLowerCase());
+    expect(upper.tags).toEqual(lower.tags);
   });
 });
 

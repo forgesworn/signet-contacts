@@ -2,6 +2,35 @@
 
 ## Unreleased
 
+- **Fix: a stored copy of the pairing ack, so a backgrounded consumer app can
+  still find it.** Field-proven 2026-09-27 (OnePlus 8T): an app that is
+  ALWAYS backgrounded when the owner approves in Signet has its socket
+  frozen, misses the ephemeral kind-21237 ack entirely (relays don't store
+  ephemeral kinds), and had nothing left to poll for — pairing failed with
+  no recovery. New `ackTag(challenge)` (`src/wire/ids.ts`) and
+  `storedAckEventTemplate` (`src/wire/ack.ts`) publish the SAME ack content
+  a second time as a replaceable kind-30078 event, `d` = `ackTag(challenge)`,
+  bounded by a NIP-40 `expiration` at `created_at +
+  PAIRING_FRESHNESS_SECONDS` — the same window the ack's own freshness
+  check already enforces. New `ACK_STORED_KIND` constant
+  (`src/wire/constants.ts`). `awaitPairingAck` now subscribes to and polls a
+  SECOND filter (`{ kinds: [ACK_STORED_KIND], '#d': [ackTag(challenge)],
+  limit: ACK_CANDIDATE_LIMIT }`) alongside the existing ephemeral one —
+  deliberately never merged into one `kinds: [21237, 30078]` + `#p` filter,
+  since a kind-30078 event addressed to the app is also how a projection is
+  shaped. `awaitPairingAck`'s default `timeoutMs` is now
+  `PAIRING_FRESHNESS_SECONDS * 1000` (300 s, was 120 s) to match the stored
+  copy's own lifetime; a caller that already passes its own `timeoutMs` is
+  unaffected. This reverses the companion-rail design's "ephemeral so
+  railPubkey leaves no persistent footprint" (signet-plans
+  `docs/plans/2026-07-17-companion-data-rail-design.md:228`) — accepted,
+  since the content stays NIP-44 sealed to the app and the event lives at
+  most five minutes on a relay that honours NIP-40. `docs/WIRE.md` (§0, §2,
+  "Ack delivery") and `SECURITY.md` (next to B1) describe both copies; the
+  one-way pairing-code argument (B1/F1) is unchanged by this, since it rests
+  on the owner's device never displaying the code, not on the ack being
+  unretrievable. `vectors/pairing.v2.json` gains an `ackTag` entry alongside
+  the existing `projectionTag`/`proposalTag`.
 - **Security (B1, F1): pairing verification code against a photographed-QR
   takeover, shown ONE way only.** `awaitPairingAck` has no author pin and
   accepts the first ack that decrypts and echoes the challenge, so a forged

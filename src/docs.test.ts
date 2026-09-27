@@ -130,7 +130,10 @@ describe('README.md — storage, options and the persistence contract (C-I1, C-I
     ]) {
       expect(readme).toContain(option);
     }
-    for (const dflt of ['604800', '120000', '2000', '60000', '8000']) {
+    // `timeoutMs`'s default moved from 120000 to 300000
+    // (`PAIRING_FRESHNESS_SECONDS * 1000`) so a backgrounded consumer's
+    // window matches the stored ack's own NIP-40 lifetime.
+    for (const dflt of ['604800', '300000', '2000', '60000', '8000']) {
       expect(readme).toContain(dflt);
     }
   });

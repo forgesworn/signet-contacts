@@ -10,10 +10,10 @@
  * passing them through — an app that trusted an unknown token would build a UI
  * around data that will never arrive.
  */
-import { ACK_KIND, clampStaleness, isCapability, normaliseCapabilities } from './constants.js';
+import { ACK_KIND, ACK_STORED_KIND, PAIRING_FRESHNESS_SECONDS, clampStaleness, isCapability, normaliseCapabilities } from './constants.js';
 import type { Capability } from './constants.js';
 import type { PairingAckV2, PairingV2, UnsignedNostrEvent } from './types.js';
-import { isHex } from './ids.js';
+import { ackTag, isHex } from './ids.js';
 import { isValidContactsRelayUrl } from './pairing.js';
 
 export function buildPairingAckV2(ack: PairingAckV2): string {
@@ -75,6 +75,31 @@ export function ackEventTemplate(
   ephemeralPubkey: string, appPubkey: string, createdAt: number, content: string,
 ): UnsignedNostrEvent {
   return { kind: ACK_KIND, pubkey: ephemeralPubkey, created_at: createdAt, tags: [['p', appPubkey]], content };
+}
+
+/**
+ * The STORED carrier — same plaintext `content` as `ackEventTemplate`, same
+ * throwaway `ephemeralPubkey`, but addressed by `ackTag(challenge)` (a
+ * replaceable `d` tag) rather than left to an ephemeral relay's memory, and
+ * bounded by a NIP-40 `expiration` at `createdAt + PAIRING_FRESHNESS_SECONDS`
+ * — the same window the ack's own freshness check already enforces. A
+ * consumer whose socket was frozen through the ephemeral event's whole life
+ * (a backgrounded app) can still poll this one up.
+ */
+export function storedAckEventTemplate(
+  ephemeralPubkey: string, appPubkey: string, createdAt: number, content: string, challenge: string,
+): UnsignedNostrEvent {
+  return {
+    kind: ACK_STORED_KIND,
+    pubkey: ephemeralPubkey,
+    created_at: createdAt,
+    tags: [
+      ['d', ackTag(challenge)],
+      ['p', appPubkey],
+      ['expiration', String(createdAt + PAIRING_FRESHNESS_SECONDS)],
+    ],
+    content,
+  };
 }
 
 /** Reduce a validated ack to the shape a consumer persists. */

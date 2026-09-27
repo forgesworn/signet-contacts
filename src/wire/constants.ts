@@ -14,6 +14,27 @@ export const PAIRING_VERSION = 2;
 export const ACK_KIND = 21237;
 export const PROJECTION_KIND = 30078;
 export const PROPOSAL_KIND = 30078;
+/**
+ * A STORED copy of the pairing ack, addressed by `ackTag(challenge)` rather
+ * than carried only by the ephemeral kind-21237 event. Ephemeral events are
+ * never stored by a relay, so a consumer app that is backgrounded (its
+ * socket frozen) when the owner approves — the OnePlus 8T field case,
+ * 2026-09-27 — sees the ephemeral ack go past and has nothing left to poll
+ * for. This event is what a later poll finds instead.
+ *
+ * NIP-40 `expiration` bounds its relay lifetime at `created_at +
+ * PAIRING_FRESHNESS_SECONDS` — the same window the ephemeral ack's own
+ * freshness check already enforces, since the pairing link is refused after
+ * that anyway (§ "Ack delivery" in docs/WIRE.md).
+ *
+ * This reverses the companion-rail design's "ephemeral so railPubkey leaves
+ * no persistent footprint" (signet-plans
+ * docs/plans/2026-07-17-companion-data-rail-design.md:228): the content is
+ * still NIP-44 sealed to the app, and the event now lives on a relay that
+ * honours NIP-40 for at most five minutes, which is judged worth it against
+ * the alternative of an ack a backgrounded app can never retrieve at all.
+ */
+export const ACK_STORED_KIND = 30078;
 export const PAIRING_FRESHNESS_SECONDS = 300;
 
 /**

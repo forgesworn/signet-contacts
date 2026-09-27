@@ -20,13 +20,13 @@
  * ack) and is always author-pinned before its ciphertext is even opened.
  */
 import {
-  ACK_CANDIDATE_LIMIT, ACK_KIND, MAX_PROPOSALS_PER_BATCH, MAX_STALENESS_SECONDS,
+  ACK_CANDIDATE_LIMIT, ACK_KIND, ACK_STORED_KIND, MAX_PROPOSALS_PER_BATCH, MAX_STALENESS_SECONDS,
   PAIRING_FRESHNESS_SECONDS, isCapability,
 } from './wire/constants.js';
 import type { Capability } from './wire/constants.js';
 import { parsePairingAckV2, pairingFromAck } from './wire/ack.js';
 import { MAX_ENVELOPE_CHARS, openVaultPayload } from './wire/envelope.js';
-import { isHex } from './wire/ids.js';
+import { ackTag, isHex } from './wire/ids.js';
 import { buildPairingUriV2, parsePairingRequestV2 } from './wire/pairing.js';
 import { parseProjection, projectionFilter } from './wire/projection.js';
 import { buildProposalBatch, draftToProposal, proposalEventTemplate } from './wire/proposal.js';
@@ -427,39 +427,57 @@ export function createSignetContactsClient(opts: {
       return parsePairingRequestV2(input, parseOpts);
     },
 
-    async awaitPairingAck({ challenge, relays, timeoutMs = 120_000, pollMs = 2000, requestedCapabilities, signal }) {
+    async awaitPairingAck({
+      challenge, relays, timeoutMs = PAIRING_FRESHNESS_SECONDS * 1000, pollMs = 2000, requestedCapabilities, signal,
+    }) {
       const deadline = Date.now() + timeoutMs;
       // I3: several candidates, not one. See `ACK_CANDIDATE_LIMIT`.
-      const filter: NostrFilterLike = {
+      const ephemeralFilter: NostrFilterLike = {
         kinds: [ACK_KIND], '#p': [signer.pubkey], limit: ACK_CANDIDATE_LIMIT,
+      };
+      // The STORED copy of the same ack — addressed by `ackTag(challenge)`,
+      // not `#p`, and NOT merged into one filter with the ephemeral kind: a
+      // kind-30078 addressed to this app pubkey also carries projections, and
+      // a combined `kinds: [ACK_KIND, ACK_STORED_KIND]` + `#p` filter would
+      // pull those in too.
+      const storedFilter: NostrFilterLike = {
+        kinds: [ACK_STORED_KIND], '#d': [ackTag(challenge)], limit: ACK_CANDIDATE_LIMIT,
       };
       const allowed = requestedCapabilities ? new Set<Capability>(requestedCapabilities) : null;
 
       const live: SignedNostrEvent[] = [];
       const attempted = new Set<string>();
       let wake: (() => void) | undefined;
-      let stop: (() => void) | undefined;
+      let stopEphemeral: (() => void) | undefined;
+      let stopStored: (() => void) | undefined;
       const abort = () => wake?.();
       if (signal?.aborted) return null;
       signal?.addEventListener('abort', abort, { once: true });
       try {
-        // Kind 21237 is ephemeral. A polling query can close on EOSE before
-        // the owner's approval arrives, so hold a live listener for the whole
-        // pairing window. Polling remains a fallback for historical producers.
+        // Kind 21237 is ephemeral, and a backgrounded app's socket can miss
+        // it entirely (the field case this stored copy exists for). A
+        // polling query can also close on EOSE before the owner's approval
+        // arrives, so hold a live listener on BOTH filters for the whole
+        // pairing window; polling remains a fallback for either.
+        const onLiveEvent = (event: SignedNostrEvent) => {
+          if (signal?.aborted || attempted.has(event.id)) return;
+          if (!live.some(held => held.id === event.id)) live.push(event);
+          if (live.length > ACK_CANDIDATE_LIMIT) live.shift();
+          wake?.();
+        };
         try {
-          stop = relay.subscribe?.(filter, relays, event => {
-            if (signal?.aborted || attempted.has(event.id)) return;
-            if (!live.some(held => held.id === event.id)) live.push(event);
-            if (live.length > ACK_CANDIDATE_LIMIT) live.shift();
-            wake?.();
-          });
+          stopEphemeral = relay.subscribe?.(ephemeralFilter, relays, onLiveEvent);
+        } catch { /* A failed live connection can still retry through polling. */ }
+        try {
+          stopStored = relay.subscribe?.(storedFilter, relays, onLiveEvent);
         } catch { /* A failed live connection can still retry through polling. */ }
         while (Date.now() < deadline && !signal?.aborted && attempted.size < 32) {
           // Hostile or merely broken relay data must never escape this loop as a
           // thrown exception — a bad event is exactly as "no ack yet" as no event.
           try {
-            const polled = await fetchAckCandidates(filter, relays).catch(() => []);
-            const candidates = [...live.splice(0), ...polled];
+            const polledEphemeral = await fetchAckCandidates(ephemeralFilter, relays).catch(() => []);
+            const polledStored = await fetchAckCandidates(storedFilter, relays).catch(() => []);
+            const candidates = [...live.splice(0), ...polledEphemeral, ...polledStored];
             for (const event of candidates) {
               if (signal?.aborted || attempted.size >= 32) return null;
               if (!event || typeof event.pubkey !== 'string' || typeof event.content !== 'string') continue;
@@ -514,7 +532,8 @@ export function createSignetContactsClient(opts: {
         }
         return null;
       } finally {
-        try { stop?.(); } catch { /* Teardown cannot change an accepted result. */ }
+        try { stopEphemeral?.(); } catch { /* Teardown cannot change an accepted result. */ }
+        try { stopStored?.(); } catch { /* Teardown cannot change an accepted result. */ }
         wake?.(); signal?.removeEventListener('abort', abort);
       }
     },

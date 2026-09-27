@@ -19,6 +19,7 @@ import { bytesToHex } from '@noble/hashes/utils.js';
 const PROJECTION_PREFIX = 'signet:contacts:proj:';
 const PROPOSAL_PREFIX = 'signet:contacts:prop:';
 const SCOPED_PREFIX = 'signet:contacts:cid:';
+const ACK_PREFIX = 'signet:contacts:v2:ack:';
 const TAG_HEX_CHARS = 32;
 
 /**
@@ -50,6 +51,20 @@ export function projectionTag(grantId: string): string {
  *  replaceable event. */
 export function proposalTag(grantId: string, appPubkey: string): string {
   return digestHex(`${PROPOSAL_PREFIX}${grantId}:${appPubkey}`).slice(0, TAG_HEX_CHARS);
+}
+
+/**
+ * Replaceable `d` tag of the STORED (kind `ACK_STORED_KIND`) copy of a
+ * pairing ack, keyed on the consumer's own anti-replay `challenge` — not on
+ * `grantId`, which does not exist yet when the app starts waiting for its
+ * ack. Lowercased before hashing, matching the byte-for-byte challenge
+ * comparison `parsePairingAckV2` itself does on the challenge FIELD (this is
+ * a routing tag, not that comparison, so case-folding it here is safe and is
+ * what lets a consumer compute the same tag regardless of how the QR's
+ * `challenge=` query parameter happened to be cased).
+ */
+export function ackTag(challenge: string): string {
+  return digestHex(`${ACK_PREFIX}${challenge.toLowerCase()}`).slice(0, TAG_HEX_CHARS);
 }
 
 /**

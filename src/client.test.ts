@@ -1,12 +1,16 @@
 import { describe, it, expect, vi } from 'vitest';
 import { createSignetContactsClient, createMemoryStorage } from './client.js';
 import type { ContactsSigner, RelayIo } from './client.js';
-import { buildPairingAckV2, ackEventTemplate } from './wire/ack.js';
+import { buildPairingAckV2, ackEventTemplate, storedAckEventTemplate } from './wire/ack.js';
 import { MAX_ENVELOPE_CHARS, sealVaultPayload } from './wire/envelope.js';
 import { buildProjection, projectionEventTemplate } from './wire/projection.js';
 import { parseProposalBatch } from './wire/proposal.js';
-import { projectionTag, proposalTag } from './wire/ids.js';
-import { ACK_CANDIDATE_LIMIT, MAX_PROPOSALS_PER_BATCH, MAX_STALENESS_SECONDS, PAIRING_FRESHNESS_SECONDS } from './wire/constants.js';
+import { ackTag, projectionTag, proposalTag } from './wire/ids.js';
+import {
+  ACK_CANDIDATE_LIMIT, ACK_KIND, ACK_STORED_KIND, MAX_PROPOSALS_PER_BATCH, MAX_STALENESS_SECONDS,
+  PAIRING_FRESHNESS_SECONDS,
+} from './wire/constants.js';
+import type { NostrFilterLike } from './wire/types.js';
 import type { ContactProjectionV2, PairingV2, PendingProposal, SignedNostrEvent } from './wire/types.js';
 
 const GRANT = 'f'.repeat(32);
@@ -306,6 +310,121 @@ describe('awaitPairingAck', () => {
     });
     const pairing = await client.awaitPairingAck({ challenge: CHALLENGE, relays: RELAYS, timeoutMs: 30, pollMs: 10 });
     expect(pairing).toBeNull();
+  });
+
+  // B4: the stored (kind 30078) copy of the ack exists so a consumer app
+  // that was backgrounded through the ephemeral ack's whole life can still
+  // find it by polling. No live event at all here — only `fetchMany`/
+  // `fetchNewest` polling turns it up.
+  it('resolves from a STORED ack found only by polling — the backgrounded-app case', async () => {
+    const signer = fakeSigner();
+    const ackPlain = buildPairingAckV2({
+      v: 2, grantId: GRANT, railPubkey: RAIL,
+      projectionTag: projectionTag(GRANT), proposalTag: proposalTag(GRANT, APP),
+      relay: RELAYS[0]!, grantedCapabilities: ['signet.contacts.read:directory'],
+      maxStalenessSeconds: 21600, challenge: CHALLENGE,
+    });
+    const content = await signer.nip44Encrypt(APP, ackPlain);
+    const storedEvent = {
+      ...storedAckEventTemplate('9'.repeat(64), APP, 1_700_000_000, content, CHALLENGE),
+      id: '4'.repeat(64), sig: '5'.repeat(128),
+    };
+    const client = createSignetContactsClient({
+      signer,
+      relay: {
+        // No `subscribe` at all — nothing is EVER pushed live, so the only
+        // way to find this ack is a poll matching the stored filter's kind
+        // and `#d` tag.
+        fetchNewest: async (filter) => {
+          const f = filter as NostrFilterLike;
+          if (Array.isArray(f.kinds) && f.kinds.includes(ACK_STORED_KIND)) return storedEvent;
+          return null;
+        },
+        publish: async () => true,
+      },
+      now: () => 1_700_000_000,
+    });
+    const pairing = await client.awaitPairingAck({ challenge: CHALLENGE, relays: RELAYS, timeoutMs: 50, pollMs: 5 });
+    expect(pairing?.grantId).toBe(GRANT);
+  });
+
+  it('still resolves from an ephemeral LIVE ack, unaffected by the stored filter', async () => {
+    const signer = fakeSigner();
+    let receiveEphemeral!: (event: SignedNostrEvent) => void;
+    const content = await signer.nip44Encrypt(APP, buildPairingAckV2({
+      v: 2, grantId: GRANT, railPubkey: RAIL, projectionTag: projectionTag(GRANT),
+      proposalTag: proposalTag(GRANT, APP), relay: RELAYS[0]!,
+      grantedCapabilities: ['signet.contacts.read:directory'], maxStalenessSeconds: 21600,
+      challenge: CHALLENGE,
+    }));
+    const client = createSignetContactsClient({
+      signer,
+      now: () => 1_700_000_000,
+      relay: {
+        fetchNewest: async () => null,
+        publish: async () => true,
+        subscribe: (filter, _relays, callback) => {
+          const f = filter as NostrFilterLike;
+          if (Array.isArray(f.kinds) && f.kinds.includes(ACK_KIND)) receiveEphemeral = callback;
+          return () => {};
+        },
+      },
+    });
+    const waiting = client.awaitPairingAck({ challenge: CHALLENGE, relays: RELAYS, pollMs: 10_000 });
+    await Promise.resolve(); await Promise.resolve();
+    receiveEphemeral({
+      ...ackEventTemplate('9'.repeat(64), APP, 1_700_000_000, content), id: '4'.repeat(64), sig: '5'.repeat(128),
+    });
+    expect((await waiting)?.grantId).toBe(GRANT);
+  });
+
+  it('queries the stored ack with kind 30078 and the ack\'s own #d tag, never merged with the ephemeral filter', async () => {
+    const filters: NostrFilterLike[] = [];
+    const client = createSignetContactsClient({
+      signer: fakeSigner(),
+      relay: {
+        fetchNewest: async (filter) => { filters.push(filter as NostrFilterLike); return null; },
+        publish: async () => true,
+      },
+    });
+    await client.awaitPairingAck({ challenge: CHALLENGE, relays: RELAYS, timeoutMs: 5, pollMs: 5 });
+    const storedFilter = filters.find((f) => Array.isArray(f.kinds) && f.kinds.includes(ACK_STORED_KIND));
+    expect(storedFilter).toBeDefined();
+    // Exactly kind 30078 — never combined with 21237 in one filter, and
+    // never merged with a projection's own filter shape (`#p`, not `#d`).
+    expect(storedFilter?.kinds).toEqual([ACK_STORED_KIND]);
+    expect(storedFilter?.['#d']).toEqual([ackTag(CHALLENGE)]);
+    expect(storedFilter?.['#p']).toBeUndefined();
+    expect(storedFilter?.limit).toBe(ACK_CANDIDATE_LIMIT);
+
+    const ephemeralFilter = filters.find((f) => Array.isArray(f.kinds) && f.kinds.includes(ACK_KIND));
+    expect(ephemeralFilter).toBeDefined();
+    expect(ephemeralFilter?.kinds).toEqual([ACK_KIND]);
+  });
+
+  it('defaults timeoutMs to PAIRING_FRESHNESS_SECONDS * 1000 (300s)', async () => {
+    vi.useFakeTimers();
+    try {
+      const fetchNewest = vi.fn(async () => null);
+      const client = createSignetContactsClient({
+        signer: fakeSigner(), relay: { fetchNewest, publish: async () => true },
+      });
+      const waiting = client.awaitPairingAck({ challenge: CHALLENGE, relays: RELAYS, pollMs: 10_000 });
+      // Just under the default deadline: still polling.
+      await vi.advanceTimersByTimeAsync(PAIRING_FRESHNESS_SECONDS * 1000 - 1_000);
+      expect(fetchNewest.mock.calls.length).toBeGreaterThan(0);
+      const callsBeforeDeadline = fetchNewest.mock.calls.length;
+      // Past the default deadline: the loop must have stopped and resolved.
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(await waiting).toBeNull();
+      // No further polling after the loop has returned.
+      const callsAfterReturn = fetchNewest.mock.calls.length;
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(fetchNewest.mock.calls.length).toBe(callsAfterReturn);
+      expect(callsAfterReturn).toBeGreaterThanOrEqual(callsBeforeDeadline);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 
@@ -1431,7 +1550,9 @@ describe('ephemeral pairing acknowledgements', () => {
     await Promise.resolve(); await Promise.resolve();
     receive({ ...ackEventTemplate('9'.repeat(64), APP, 1700000000, content), id: '4'.repeat(64), sig: '5'.repeat(128) });
     expect((await waiting)?.grantId).toBe(GRANT);
-    expect(stopped).toHaveBeenCalledOnce();
+    // Two live subscriptions now (ephemeral kind 21237 + stored kind 30078),
+    // both handed the SAME mock `stop` here, so teardown calls it twice.
+    expect(stopped).toHaveBeenCalledTimes(2);
   });
   it('cancels a waiting live listener without accepting a late acknowledgement', async () => {
     const controller = new AbortController(), stopped = vi.fn(), signer = fakeSigner();
@@ -1439,7 +1560,9 @@ describe('ephemeral pairing acknowledgements', () => {
       publish: async () => true, subscribe: () => stopped } });
     const waiting = client.awaitPairingAck({ challenge: CHALLENGE, relays: RELAYS, signal: controller.signal });
     controller.abort();
-    expect(await waiting).toBeNull(); expect(stopped).toHaveBeenCalledOnce();
+    expect(await waiting).toBeNull();
+    // Both the ephemeral and the stored subscription are torn down.
+    expect(stopped).toHaveBeenCalledTimes(2);
   });
   it('limits identity decryption to 32 unique candidates for one pairing attempt', async () => {
     const signer = fakeSigner(); signer.nip44Decrypt = vi.fn(async () => { throw new Error('not our ack'); });
