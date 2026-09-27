@@ -47,9 +47,9 @@ describe('ackTag', () => {
   });
 
   it('pins the exact frozen digest', () => {
-    // sha256('signet:contacts:v2:ack:' + CHALLENGE.toLowerCase()).slice(0,32)
+    // sha256('signet:contacts:ack:' + CHALLENGE.toLowerCase()).slice(0,32)
     // — regenerate ONLY with an accompanying wire major bump.
-    expect(ackTag(CHALLENGE)).toBe('27ca1b2aef35f588dbab47e76d88ca0c');
+    expect(ackTag(CHALLENGE)).toBe('630f26ef0b0b835998967c711cb7c390');
   });
 });
 

@@ -348,6 +348,53 @@ describe('awaitPairingAck', () => {
     expect(pairing?.grantId).toBe(GRANT);
   });
 
+  // Item 2 (security review): crowding mitigation. A photographed QR lets an
+  // attacker flood the STORED ack tag with junk. If `ACK_CANDIDATE_LIMIT`
+  // (10) or more newer junk events sit in front of the genuine (older) ack,
+  // a poll that only ever asks for the newest page would never see it. The
+  // fix pages backward with `until` once a full page comes back entirely
+  // already-`attempted`.
+  it('pages back past a crowd of newer junk stored acks to reach an older genuine one (crowding)', async () => {
+    const signer = fakeSigner();
+    const BASE = 1_700_000_000;
+    const ackPlain = buildPairingAckV2({
+      v: 2, grantId: GRANT, railPubkey: RAIL,
+      projectionTag: projectionTag(GRANT), proposalTag: proposalTag(GRANT, APP),
+      relay: RELAYS[0]!, grantedCapabilities: ['signet.contacts.read:directory'],
+      maxStalenessSeconds: 21600, challenge: CHALLENGE,
+    });
+    const genuineContent = await signer.nip44Encrypt(APP, ackPlain);
+    // 10 newer junk events (undecryptable), newest first: BASE, BASE-1, ..., BASE-9.
+    const junk: SignedNostrEvent[] = Array.from({ length: ACK_CANDIDATE_LIMIT }, (_, i) => ({
+      ...storedAckEventTemplate('7'.repeat(64), APP, BASE - i, 'not even JSON, always fails to decrypt', CHALLENGE),
+      id: String(i).padStart(64, '0'), sig: '5'.repeat(128),
+    }));
+    // One older genuine ack, reachable only by paging past the whole junk page.
+    const genuine: SignedNostrEvent = {
+      ...storedAckEventTemplate('9'.repeat(64), APP, BASE - 15, genuineContent, CHALLENGE),
+      id: '8'.repeat(64), sig: '5'.repeat(128),
+    };
+    const allStored = [...junk, genuine];
+    const fetchMany = vi.fn(async (filter: NostrFilterLike) => {
+      if (!Array.isArray(filter.kinds) || !filter.kinds.includes(ACK_STORED_KIND)) return [];
+      const until = typeof filter.until === 'number' ? filter.until : Number.POSITIVE_INFINITY;
+      return allStored
+        .filter((e) => e.created_at <= until)
+        .sort((a, b) => b.created_at - a.created_at)
+        .slice(0, ACK_CANDIDATE_LIMIT);
+    });
+    const client = createSignetContactsClient({
+      signer,
+      relay: { fetchNewest: async () => null, fetchMany, publish: async () => true },
+      now: () => BASE,
+    });
+    const pairing = await client.awaitPairingAck({ challenge: CHALLENGE, relays: RELAYS, timeoutMs: 200, pollMs: 5 });
+    expect(pairing?.grantId).toBe(GRANT);
+    // Proves paging actually ran, not just that several outer-loop polls happened.
+    const pagedCalls = fetchMany.mock.calls.filter(([f]) => typeof (f as NostrFilterLike).until === 'number');
+    expect(pagedCalls.length).toBeGreaterThan(0);
+  });
+
   it('still resolves from an ephemeral LIVE ack, unaffected by the stored filter', async () => {
     const signer = fakeSigner();
     let receiveEphemeral!: (event: SignedNostrEvent) => void;
@@ -402,26 +449,96 @@ describe('awaitPairingAck', () => {
     expect(ephemeralFilter?.kinds).toEqual([ACK_KIND]);
   });
 
-  it('defaults timeoutMs to PAIRING_FRESHNESS_SECONDS * 1000 (300s)', async () => {
+  // Security review fix: the producer accepts the pairing link until
+  // t+PAIRING_FRESHNESS_SECONDS and the stored ack lives until its own
+  // created_at+PAIRING_FRESHNESS_SECONDS — a second window after the first —
+  // so the default now covers both in sequence.
+  it('defaults timeoutMs to 2 * PAIRING_FRESHNESS_SECONDS * 1000 (600s)', async () => {
     vi.useFakeTimers();
     try {
+      const DEFAULT_TIMEOUT_MS = 2 * PAIRING_FRESHNESS_SECONDS * 1000;
       const fetchNewest = vi.fn(async () => null);
       const client = createSignetContactsClient({
         signer: fakeSigner(), relay: { fetchNewest, publish: async () => true },
       });
       const waiting = client.awaitPairingAck({ challenge: CHALLENGE, relays: RELAYS, pollMs: 10_000 });
       // Just under the default deadline: still polling.
-      await vi.advanceTimersByTimeAsync(PAIRING_FRESHNESS_SECONDS * 1000 - 1_000);
+      await vi.advanceTimersByTimeAsync(DEFAULT_TIMEOUT_MS - 1_000);
       expect(fetchNewest.mock.calls.length).toBeGreaterThan(0);
-      const callsBeforeDeadline = fetchNewest.mock.calls.length;
-      // Past the default deadline: the loop must have stopped and resolved.
-      await vi.advanceTimersByTimeAsync(2_000);
+      // Past the default deadline: the loop must have stopped and resolved
+      // — after one final poll pass (the resume-after-deadline fix: a poll
+      // always runs before the deadline/abort/cap check).
+      await vi.advanceTimersByTimeAsync(20_000);
       expect(await waiting).toBeNull();
       // No further polling after the loop has returned.
       const callsAfterReturn = fetchNewest.mock.calls.length;
       await vi.advanceTimersByTimeAsync(10_000);
       expect(fetchNewest.mock.calls.length).toBe(callsAfterReturn);
-      expect(callsAfterReturn).toBeGreaterThanOrEqual(callsBeforeDeadline);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // Item 1 (security review): a backgrounded app's timer can fire LATE — its
+  // real wake-up may land after `deadline` has already elapsed in wall-clock
+  // terms. The fix is that every loop iteration polls FIRST and only then
+  // checks the deadline, so a late wake still gets one more look at the
+  // relays. Simulated here by jumping the fake clock straight past the
+  // deadline WITHOUT letting the pending sleep timer fire, making the stored
+  // ack available only after that jump, and then firing the (now overdue)
+  // timer — the resolution proves the poll-after-jump actually happened.
+  it('resumes from a frozen/late timer and still finds a stored ack that arrived while suspended', async () => {
+    vi.useFakeTimers();
+    try {
+      const signer = fakeSigner();
+      const ackPlain = buildPairingAckV2({
+        v: 2, grantId: GRANT, railPubkey: RAIL,
+        projectionTag: projectionTag(GRANT), proposalTag: proposalTag(GRANT, APP),
+        relay: RELAYS[0]!, grantedCapabilities: ['signet.contacts.read:directory'],
+        maxStalenessSeconds: 21600, challenge: CHALLENGE,
+      });
+      const content = await signer.nip44Encrypt(APP, ackPlain);
+      let ackAvailable = false;
+      const client = createSignetContactsClient({
+        signer,
+        // `now()` must track the faked wall clock, or the ack's freshness
+        // check (judged against the carrier event's `created_at`) fails
+        // once we jump the clock far into the future.
+        now: () => Math.floor(Date.now() / 1000),
+        relay: {
+          fetchNewest: async (filter) => {
+            const f = filter as NostrFilterLike;
+            if (!ackAvailable || !Array.isArray(f.kinds) || !f.kinds.includes(ACK_STORED_KIND)) return null;
+            return {
+              ...storedAckEventTemplate('9'.repeat(64), APP, Math.floor(Date.now() / 1000), content, CHALLENGE),
+              id: '4'.repeat(64), sig: '5'.repeat(128),
+            };
+          },
+          publish: async () => true,
+        },
+      });
+      const pollMs = 10_000;
+      const waiting = client.awaitPairingAck({ challenge: CHALLENGE, relays: RELAYS, pollMs });
+      // Flush the very first (immediate) poll pass so the first sleep timer
+      // gets scheduled.
+      await vi.advanceTimersByTimeAsync(0);
+      // Freeze: jump the clock WAY past the default deadline (600s) without
+      // firing the pending timer — `setSystemTime` alone does not run
+      // callbacks, which is exactly the "suspended, not ticking" simulation.
+      const frozenUntil = Date.now() + 2 * PAIRING_FRESHNESS_SECONDS * 1000 + 60_000;
+      vi.setSystemTime(frozenUntil);
+      // The ack "arrives" while the app was suspended.
+      ackAvailable = true;
+      // Now let the overdue timer fire. `Date.now()` already reports a time
+      // past `deadline`; with the fix, the loop still polls once more before
+      // checking that and finds the now-available stored ack.
+      // (`runOnlyPendingTimersAsync`, not `advanceTimersByTimeAsync(0)`: a
+      // timer already overdue relative to a `setSystemTime` jump is not
+      // caught by a zero-length tick — it only fires once the fake clock is
+      // told to actually advance to or past it, or run pending timers
+      // directly.)
+      await vi.runOnlyPendingTimersAsync();
+      expect((await waiting)?.grantId).toBe(GRANT);
     } finally {
       vi.useRealTimers();
     }

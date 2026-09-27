@@ -207,6 +207,44 @@ stored and spent one of the owner's grant slots on a pairing that can never
 complete. An implementation that can only fetch one event per relay should
 query each relay separately rather than one merged newest.
 
+**Crowding, and paging past it (stored copy only).** Because the stored copy
+persists for the whole `PAIRING_FRESHNESS_SECONDS` window rather than
+vanishing once no live subscriber caught it, the junk above is no longer
+bounded to a single race at pairing time — an attacker can keep publishing
+newer junk `ACK_STORED_KIND` events addressed to `ackTag(challenge)` for as
+long as the window lasts, potentially keeping more than `ACK_CANDIDATE_LIMIT`
+of them newer than the genuine (older) stored ack at any moment a poll runs.
+A reference implementation MUST therefore page backward once it sees this: if
+a FULL page (`ACK_CANDIDATE_LIMIT` events) comes back and every id in it was
+already a candidate on a prior poll, re-query the same filter with `until =
+(the oldest `created_at` in that page) - 1` — one second earlier than the
+oldest event just seen, not that timestamp itself, because a relay's `until`
+is inclusive (NIP-01) and re-querying with the boundary value unchanged would
+hand back an identical page forever. Paging stops the moment a page is
+shorter than the limit (nothing further back exists) or contains an id not
+yet seen (something worth decrypting), and is bounded to a small, constant
+number of pages per poll (this SDK: 3) so a flood can cost extra relay round
+trips but never an unbounded chain of them; the existing 32-candidate
+attempted cap still applies underneath regardless.
+
+**The wait window, and resuming after it.** `awaitPairingAck`'s default
+`timeoutMs` is `2 * PAIRING_FRESHNESS_SECONDS * 1000` (600 s): the producer
+accepts the pairing link itself only until `t + PAIRING_FRESHNESS_SECONDS`,
+and once approved, the stored ack lives until its own `created_at +
+PAIRING_FRESHNESS_SECONDS` — a SECOND window that starts wherever inside the
+first Signet actually approved, so the consumer's own wait covers both in
+sequence rather than giving up partway through the second window's possible
+lifetime. Every polling iteration MUST poll the relays FIRST and only THEN
+check whether the deadline has passed, the caller aborted, or the
+candidate cap was hit — never the other way around. A consumer whose process
+was suspended (backgrounded, or the device slept) can resume with its
+sleep/poll timer firing well after `deadline` has already elapsed in
+wall-clock terms; if the deadline check runs before that resumed poll, such a
+client gives up despite a stored ack having been sitting there, retrievable,
+the whole time it was suspended. Polling first is what turns "suspended past
+the deadline" into "one last poll, then give up" rather than "gave up without
+ever looking."
+
 That is the denial-of-service case. The graver one is a **takeover**: a
 photographer who publishes a forged ack encrypted to the app and echoing the
 app's own challenge, addressed to arrive before the owner's real one, wins —
@@ -299,7 +337,13 @@ the ack and contact-exchange events carry a readable `p` tag (§0).
 projectionTag(grantId)              = sha256hex('signet:contacts:proj:' + grantId)[0..32]
 proposalTag(grantId, appPubkey)     = sha256hex('signet:contacts:prop:' + grantId + ':' + appPubkey)[0..32]
 scopedContactId(grantId, contactId) = sha256hex('signet:contacts:cid:' + grantId.length + ':' + grantId + ':' + contactId.length + ':' + contactId)[0..32]
+ackTag(challenge)                   = sha256hex('signet:contacts:ack:' + challenge.toLowerCase())[0..32]
 ```
+
+`ackTag` is keyed on the consumer's own `challenge`, lowercased before
+hashing (so an upper- or lower-case QR `challenge=` parameter resolves to the
+same tag) — not on `grantId`, which does not exist yet when the app starts
+waiting for its ack.
 
 `scopedContactId` mixes in both input *lengths* before the values, so
 `('ab', 'c:d')` and `('ab:c', 'd')` cannot collide the way plain

@@ -19,18 +19,45 @@
   deliberately never merged into one `kinds: [21237, 30078]` + `#p` filter,
   since a kind-30078 event addressed to the app is also how a projection is
   shaped. `awaitPairingAck`'s default `timeoutMs` is now
-  `PAIRING_FRESHNESS_SECONDS * 1000` (300 s, was 120 s) to match the stored
-  copy's own lifetime; a caller that already passes its own `timeoutMs` is
-  unaffected. This reverses the companion-rail design's "ephemeral so
-  railPubkey leaves no persistent footprint" (signet-plans
+  `2 * PAIRING_FRESHNESS_SECONDS * 1000` (600 s, was 120 s): the producer
+  accepts the pairing link until `t + PAIRING_FRESHNESS_SECONDS`, and the
+  stored ack lives until its own `created_at + PAIRING_FRESHNESS_SECONDS` —
+  a second window after the first — so the consumer's own wait covers both
+  in sequence; a caller that already passes its own `timeoutMs` is
+  unaffected. `ackTag`'s domain-separation prefix is `signet:contacts:ack:`,
+  matching the SDK's existing `proj:`/`prop:`/`cid:` tags (not the
+  `signet:contacts:v2:<kind>:<author>` shape of signet-app's own rail
+  namespace, which this tag never nested inside). This reverses the
+  companion-rail design's "ephemeral so railPubkey leaves no persistent
+  footprint" (signet-plans
   `docs/plans/2026-07-17-companion-data-rail-design.md:228`) — accepted,
   since the content stays NIP-44 sealed to the app and the event lives at
-  most five minutes on a relay that honours NIP-40. `docs/WIRE.md` (§0, §2,
-  "Ack delivery") and `SECURITY.md` (next to B1) describe both copies; the
-  one-way pairing-code argument (B1/F1) is unchanged by this, since it rests
-  on the owner's device never displaying the code, not on the ack being
-  unretrievable. `vectors/pairing.v2.json` gains an `ackTag` entry alongside
-  the existing `projectionTag`/`proposalTag`.
+  most five minutes on a relay that honours NIP-40.
+
+  Two follow-up fixes from independent review, on the same branch before
+  merge: (1) **resume-after-deadline** — the wait loop now polls the relays
+  FIRST on every iteration and checks the deadline/abort/candidate-cap only
+  after, so a consumer whose sleep/poll timer fires late (backgrounded past
+  `deadline` in wall-clock terms) still gets one more look at the relays
+  rather than giving up without ever polling again; (2) **crowding** — a
+  stored-ack poll that gets back a full `ACK_CANDIDATE_LIMIT` page where
+  every id was already a candidate on a prior poll now pages backward with
+  `until = (oldest created_at in that page) - 1`, up to 3 pages per poll, so
+  a flood of newer junk stored acks (persistent for the whole freshness
+  window, unlike the ephemeral kind) cannot crowd an older genuine one out
+  of every page polled.
+
+  `docs/WIRE.md` (§0, §2, "Ack delivery") and `SECURITY.md` (next to B1)
+  describe both copies, the paging bound and the wait window; the one-way
+  pairing-code argument (B1/F1) is unchanged by this, since it rests on the
+  owner's device never displaying the code, not on the ack being
+  unretrievable. `SECURITY.md` also now notes that if the app's own key
+  leaks later, and a relay ignored the NIP-40 expiry, a still-present
+  stored ack reveals that one grant's history (`grantId`/`railPubkey`/
+  `relay`/tags/capabilities) — no new access, since a leaked app key already
+  opens every projection the app was ever granted. `vectors/pairing.v2.json`
+  gains an `ackTag` entry alongside the existing
+  `projectionTag`/`proposalTag`.
 - **Security (B1, F1): pairing verification code against a photographed-QR
   takeover, shown ONE way only.** `awaitPairingAck` has no author pin and
   accepts the first ack that decrypts and echoes the challenge, so a forged

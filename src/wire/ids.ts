@@ -2,8 +2,10 @@
  * Identifiers and routing tags.
  *
  * Every tag is a domain-separated SHA-256 truncated to 128 bits (32 hex). The
- * prefixes are what stop one grant's tag being computable as another's, and
- * what stops a projection tag ever equalling a proposal tag for the same grant.
+ * prefixes (`proj:`/`prop:`/`cid:`/`ack:`) are what stop one grant's tag
+ * being computable as another's, and what stops a projection tag ever
+ * equalling a proposal, scoped-contact-id or ack tag for the same grant or
+ * challenge.
  *
  * Tags are OPAQUE on the relay by design (exploration §7): a scraper of kind
  * 30078 sees a random-looking `d` tag, not `signet:contacts:<something>`, so
@@ -19,7 +21,7 @@ import { bytesToHex } from '@noble/hashes/utils.js';
 const PROJECTION_PREFIX = 'signet:contacts:proj:';
 const PROPOSAL_PREFIX = 'signet:contacts:prop:';
 const SCOPED_PREFIX = 'signet:contacts:cid:';
-const ACK_PREFIX = 'signet:contacts:v2:ack:';
+const ACK_PREFIX = 'signet:contacts:ack:';
 const TAG_HEX_CHARS = 32;
 
 /**

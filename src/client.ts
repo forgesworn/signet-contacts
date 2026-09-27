@@ -172,6 +172,13 @@ const DEFAULT_PENDING_STALENESS_SECONDS = 604_800;
  *  noticed within a minute of it coming back. */
 export const DEFAULT_LIVE_POLL_MS = 60_000;
 
+/** How many `until`-paged fetches `fetchAckCandidatesPaged` will make for the
+ *  STORED ack filter in one poll, when every page it sees is already fully
+ *  `attempted` (see that function). Bounds a crowding flood to a small,
+ *  constant number of relay round trips per outer poll iteration; the
+ *  32-candidate `attempted` cap is the other, independent bound. */
+const MAX_ACK_PAGES = 3;
+
 const CAPABILITY_FOR_ACTION: Record<ContactProposalDraft['action'], Capability> = {
   'add-ken': 'signet.contacts.propose:add-ken',
   'rename-app-label': 'signet.contacts.propose:rename-app-label',
@@ -309,6 +316,52 @@ export function createSignetContactsClient(opts: {
     return one ? [one] : [];
   }
 
+  /**
+   * Crowding mitigation for the STORED ack filter only. A photographed QR
+   * lets anyone publish junk kind-`ACK_STORED_KIND` events addressed to this
+   * app's `ackTag(challenge)` — unlike the ephemeral kind, these persist on
+   * the relay for the whole `PAIRING_FRESHNESS_SECONDS` window, so a
+   * determined flood of MORE than `ACK_CANDIDATE_LIMIT` junk events (all
+   * newer than the genuine ack) can crowd it out of every page this client
+   * would otherwise ask for.
+   *
+   * If a FULL page (`ACK_CANDIDATE_LIMIT` events) comes back with every id
+   * already in `attempted` — i.e. this exact page was already seen and
+   * exhausted on a prior poll — page BACKWARD in time with `until = (oldest
+   * created_at in that page) - 1`. `- 1`, not the oldest value itself,
+   * because a relay's `until` is inclusive (NIP-01): re-querying with
+   * `until = oldest` would hand back the very same page forever, which is
+   * the infinite same-page loop this guards against; stepping one second
+   * further back is what guarantees progress. Paging stops the moment a page
+   * is short of the limit (nothing further back) or contains an id NOT yet
+   * in `attempted` (something worth processing), and is bounded at
+   * `MAX_ACK_PAGES` fetches per call so one crowded poll can never turn into
+   * an unbounded chain of relay round trips — the existing 32-candidate
+   * `attempted` cap still applies on top, in the caller's processing loop.
+   */
+  async function fetchAckCandidatesPaged(
+    filter: NostrFilterLike, relays: string[], attempted: ReadonlySet<string>,
+  ): Promise<SignedNostrEvent[]> {
+    let currentFilter = filter;
+    let page = await fetchAckCandidates(currentFilter, relays);
+    let pagesFetched = 1;
+    while (
+      pagesFetched < MAX_ACK_PAGES
+      && page.length === ACK_CANDIDATE_LIMIT
+      && page.every((event) => typeof event?.id === 'string' && attempted.has(event.id))
+    ) {
+      let oldest = Number.POSITIVE_INFINITY;
+      for (const event of page) {
+        if (typeof event.created_at === 'number' && event.created_at < oldest) oldest = event.created_at;
+      }
+      if (!Number.isFinite(oldest)) break;
+      currentFilter = { ...currentFilter, until: oldest - 1 };
+      page = await fetchAckCandidates(currentFilter, relays);
+      pagesFetched += 1;
+    }
+    return page;
+  }
+
   let unsubscribe: (() => void) | null = null;
   let pollTimer: ReturnType<typeof setInterval> | null = null;
   /** Bumped on every teardown, so a `stop` handle returned by an earlier
@@ -428,7 +481,13 @@ export function createSignetContactsClient(opts: {
     },
 
     async awaitPairingAck({
-      challenge, relays, timeoutMs = PAIRING_FRESHNESS_SECONDS * 1000, pollMs = 2000, requestedCapabilities, signal,
+      // The producer accepts the pairing link until t+PAIRING_FRESHNESS_SECONDS
+      // and the stored ack lives until its own created_at+PAIRING_FRESHNESS_SECONDS
+      // — a SECOND window after the first, since Signet may not approve until
+      // near the end of the link's own window. Doubled so the consumer's own
+      // wait covers both in sequence rather than giving up mid-way through
+      // the stored copy's possible lifetime.
+      challenge, relays, timeoutMs = 2 * PAIRING_FRESHNESS_SECONDS * 1000, pollMs = 2000, requestedCapabilities, signal,
     }) {
       const deadline = Date.now() + timeoutMs;
       // I3: several candidates, not one. See `ACK_CANDIDATE_LIMIT`.
@@ -471,12 +530,24 @@ export function createSignetContactsClient(opts: {
         try {
           stopStored = relay.subscribe?.(storedFilter, relays, onLiveEvent);
         } catch { /* A failed live connection can still retry through polling. */ }
-        while (Date.now() < deadline && !signal?.aborted && attempted.size < 32) {
+        // Deliberately `while (true)`, not a compound deadline/abort/cap
+        // condition: that check now runs ONLY after a poll pass (below), so
+        // a wake that fires late — a backgrounded timer resuming after
+        // `deadline` has already elapsed in wall-clock terms — still gets
+        // one more look at the relays before this returns null. A poll that
+        // finds nothing is cheap; a poll skipped because the clock outran a
+        // frozen timer is a pairing that could have succeeded and didn't.
+        while (true) {
           // Hostile or merely broken relay data must never escape this loop as a
           // thrown exception — a bad event is exactly as "no ack yet" as no event.
           try {
             const polledEphemeral = await fetchAckCandidates(ephemeralFilter, relays).catch(() => []);
-            const polledStored = await fetchAckCandidates(storedFilter, relays).catch(() => []);
+            // Paged: a photographed QR's junk can persist on a relay (unlike
+            // the ephemeral kind) for the whole freshness window, so a flood
+            // of more than `ACK_CANDIDATE_LIMIT` such events could otherwise
+            // crowd the genuine stored ack out of every page this client
+            // polls for.
+            const polledStored = await fetchAckCandidatesPaged(storedFilter, relays, attempted).catch(() => []);
             const candidates = [...live.splice(0), ...polledEphemeral, ...polledStored];
             for (const event of candidates) {
               if (signal?.aborted || attempted.size >= 32) return null;
