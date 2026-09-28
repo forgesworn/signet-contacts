@@ -1,0 +1,69 @@
+name: Conformance
+
+# Keeps forgesworn/signet-contacts-conformance in step with this repository.
+#
+# On a pull request: regenerates the conformance vectors from this branch and
+# reports whether merging will change them. It does not block the merge (the
+# conformance repository can only follow once this lands on main), but the
+# summary tells a reviewer that every port will need to follow.
+#
+# On main: asks the conformance repository to regenerate, which opens a sync
+# pull request there; once that merges, every port re-runs against it.
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  drift:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          repository: forgesworn/signet-contacts-conformance
+          ref: main
+          path: .conformance
+          persist-credentials: false
+      # Pinned to the conformance generator's Node: relay URL normalisation
+      # differs between Node 22 and 24.
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - name: Compare with the published conformance vectors
+        env:
+          SIGNET_CONTACTS_DIR: ${{ github.workspace }}
+        run: |
+          if node .conformance/scripts/generate.mjs --check; then
+            echo "Conformance vectors unchanged by this branch." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "::warning::This branch changes the conformance vectors. After merge, review and merge the sync pull request in signet-contacts-conformance; every port must then follow."
+            echo "This branch **changes the conformance vectors**. After merge, the sync pull request in signet-contacts-conformance must be reviewed and merged, and every port must follow." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+  notify:
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ask signet-contacts-conformance to sync
+        env:
+          GH_TOKEN: ${{ secrets.CONFORMANCE_DISPATCH_TOKEN }}
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::notice::CONFORMANCE_DISPATCH_TOKEN is not set; signet-contacts-conformance will sync on its nightly run."
+            exit 0
+          fi
+          gh api repos/forgesworn/signet-contacts-conformance/dispatches \
+            -f event_type=signet-contacts-updated -f "client_payload[sha]=${{ github.sha }}"

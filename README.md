@@ -180,6 +180,12 @@ the grant was revoked: `client.getBlockedSet()` is sticky and ignores both.
 - [`docs/INTEGRATION.md`](docs/INTEGRATION.md) — a worked integration against a
   real consumer app.
 - [`SECURITY.md`](SECURITY.md) — the threat model this wire was built against.
+- [signet-contacts-conformance](https://github.com/forgesworn/signet-contacts-conformance)
+  — these vectors plus generated edge cases, for ports to other languages; a
+  change here that alters them opens a sync pull request there
+  (`.github/workflows/conformance.yml`).
+- [signet-contacts-kotlin](https://github.com/forgesworn/signet-contacts-kotlin)
+  — the Kotlin port, tested against every conformance vector.
 - [`CHANGELOG.md`](CHANGELOG.md) — dated wire changes, including which ones are
   not backwards compatible. There are no published releases yet, so pin a
   commit and read this before moving the pin.
