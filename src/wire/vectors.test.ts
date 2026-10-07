@@ -7,6 +7,9 @@ import { buildProposalBatch, parseProposalBatch } from './proposal.js';
 import { ackTag, projectionTag, proposalTag, scopedContactId, sanitizeWireText } from './ids.js';
 import { pairingCode } from './pairing-code.js';
 import { MAX_DISPLAY_NAME } from './constants.js';
+import { createContactRequest, createContactAcceptance, createContactReveal, contactMessageHash,
+  contactCommitment, parseContactCard, parseContactExchangeMessage } from './invite.js';
+import type { ContactCard } from './invite.js';
 import type { ContactProjectionV2, ContactProposalV1, PairingAckV2 } from './types.js';
 import { sealVaultPayload, openVaultPayload } from './envelope.js';
 import type { SealEnvelopeBackend, OpenEnvelopeBackend } from './envelope.js';
@@ -395,6 +398,65 @@ describe('vectors', () => {
   // for this test run (vitest runs `it`s within one `describe` in declaration
   // order), and reads the files back as raw BYTES rather than a decoded
   // string, so an escaping regression cannot hide behind a lenient decoder.
+  it('freezes the contact card on request and accept, and the cases a parser must drop (card is outside every hash)', () => {
+    const from = '1'.repeat(64), to = '2'.repeat(64), nonce = '3'.repeat(64);
+    const id = '4'.repeat(32), reply = { secret: '5'.repeat(64), relays: ['wss://relay.example'] };
+    const requestCard: ContactCard = { name: 'Ada Lovelace',
+      photo: { key: '8'.repeat(64), server: 'https://blossom.example/', hash: '9'.repeat(64) } };
+    const acceptCard: ContactCard = { name: 'Grace Hopper' };
+    const plainRequest = createContactRequest({ id, from, to, nonce, reply, now: NOW });
+    const request = createContactRequest({ id, from, to, nonce, reply, now: NOW, card: requestCard });
+    const plainAcceptance = createContactAcceptance(plainRequest, '6'.repeat(64), NOW + 1);
+    const acceptance = createContactAcceptance(request, '6'.repeat(64), NOW + 1, acceptCard);
+    const reveal = createContactReveal(request, acceptance, nonce, NOW + 2);
+    expect(request.card).toEqual(requestCard);
+    expect(acceptance.card).toEqual(acceptCard);
+    expect(contactMessageHash(request)).toBe(contactMessageHash(plainRequest));
+    expect(contactMessageHash(acceptance)).toBe(contactMessageHash(plainAcceptance));
+    const photo = (over: Record<string, unknown>) => ({ key: '8'.repeat(64), server: 'https://blossom.example/', hash: '9'.repeat(64), ...over });
+    const cardCases: Array<[string, unknown]> = [
+      ['name and photo', requestCard],
+      ['name only', { name: 'Ada' }],
+      ['photo only', { photo: photo({}) }],
+      ['server is normalised as a WHATWG URL href', { photo: photo({ server: 'https://Blossom.Example' }) }],
+      ['name has control and bidi characters stripped, then is trimmed', { name: '  \u202eAda\u0000 Lovelace\u2069 ' }],
+      ['name of exactly 100 characters', { name: 'a'.repeat(100) }],
+      ['unknown card and photo fields are dropped', { name: 'Ada', nickname: 'x', photo: photo({ extra: 1 }) }],
+      ['name of 101 characters is dropped, the photo survives', { name: 'a'.repeat(101), photo: photo({}) }],
+      ['name that is empty after stripping is dropped', { name: ' \u202e\u0007 ', photo: photo({}) }],
+      ['name that is not a string is dropped', { name: 7, photo: photo({}) }],
+      ['photo key in uppercase hex drops the photo', { name: 'Ada', photo: photo({ key: 'A'.repeat(64) }) }],
+      ['photo hash of the wrong length drops the photo', { name: 'Ada', photo: photo({ hash: '9'.repeat(63) }) }],
+      ['photo server over http drops the photo', { name: 'Ada', photo: photo({ server: 'http://blossom.example/' }) }],
+      ['photo server with credentials drops the photo', { name: 'Ada', photo: photo({ server: 'https://u:p@blossom.example/' }) }],
+      ['photo server with a fragment drops the photo', { name: 'Ada', photo: photo({ server: 'https://blossom.example/#x' }) }],
+      ['photo server over 512 characters drops the photo', { name: 'Ada', photo: photo({ server: `https://blossom.example/${'a'.repeat(512)}` }) }],
+      ['photo server that is not a URL drops the photo', { name: 'Ada', photo: photo({ server: 'blossom' }) }],
+      ['photo missing a field drops the photo', { name: 'Ada', photo: { key: '8'.repeat(64), hash: '9'.repeat(64) } }],
+      ['a card left with nothing valid is dropped', { name: '', photo: photo({ key: 'zz' }) }],
+      ['an empty card is dropped', {}],
+      ['a card that is not an object is dropped', 'Ada'],
+      ['a card over 1024 bytes of JSON is dropped', { name: 'Ada', pad: 'x'.repeat(1100) }],
+    ];
+    const messageCases: Array<[string, string]> = [
+      ['request with a valid card', JSON.stringify(request)],
+      ['request with an invalid card still parses, without the card', JSON.stringify({ ...request, card: { name: 7, photo: { key: 'nope' } } })],
+      ['request with an oversized card still parses, without the card', JSON.stringify({ ...request, card: { name: 'Ada', pad: 'x'.repeat(1100) } })],
+      ['acceptance with a valid card', JSON.stringify(acceptance)],
+      ['reveal never carries a card', JSON.stringify({ ...reveal, card: acceptCard })],
+    ];
+    const out = {
+      note: 'Public deterministic test material. The card is presentation only: it is outside contactMessageHash, so a message hashes identically with and without it.',
+      from, to, nonce, id, commitment: contactCommitment({ id, from, to, nonce }),
+      request, acceptance,
+      requestHash: contactMessageHash(request), requestHashWithoutCard: contactMessageHash(plainRequest),
+      acceptanceHash: contactMessageHash(acceptance), acceptanceHashWithoutCard: contactMessageHash(plainAcceptance),
+      cardCases: cardCases.map(([name, input]) => ({ name, input, expected: parseContactCard(input) })),
+      messageCases: messageCases.map(([name, raw]) => ({ name, raw, expected: parseContactExchangeMessage(raw) })),
+    };
+    frozen('vectors/contact-card-v1.json', out);
+  });
+
   it('never puts a raw non-ASCII byte or an unescaped control character in a frozen vector file', () => {
     const files = [
       'vectors/pairing.v2.json',
@@ -403,6 +465,7 @@ describe('vectors', () => {
       'vectors/sanitise.json',
       'vectors/envelope.v2.json',
       'vectors/pairing-code.json',
+      'vectors/contact-card-v1.json',
     ];
     for (const path of files) {
       const bytes = readFileSync(path);

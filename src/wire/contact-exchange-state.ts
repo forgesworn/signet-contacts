@@ -1,6 +1,6 @@
 import { CONTACT_IDENTITY_DECRYPTS_PER_UNLOCK, contactCommitment, contactMessageHash,
   createContactAcceptance, createContactReveal, contactVerificationWords } from './invite.js';
-import type { ContactRequest, ContactAcceptance, ContactReveal } from './invite.js';
+import type { ContactRequest, ContactAcceptance, ContactReveal, ContactCard } from './invite.js';
 
 /** Owner-private state. Persist before emitting the corresponding message. */
 export interface ContactExchangeState {
@@ -16,8 +16,9 @@ export function beginContactExchange(request: ContactRequest, nonce: string): Co
   contactMessageHash(request);
   return { role: 'requester', request, nonce, phase: 'requested' };
 }
-export function acceptContactExchange(request: ContactRequest, nonce: string, now: number): ContactExchangeState {
-  return { role: 'recipient', request, nonce, acceptance: createContactAcceptance(request, nonce, now), phase: 'accepted' };
+export function acceptContactExchange(request: ContactRequest, nonce: string, now: number,
+  card?: ContactCard): ContactExchangeState {
+  return { role: 'recipient', request, nonce, acceptance: createContactAcceptance(request, nonce, now, card), phase: 'accepted' };
 }
 /** The first acceptance is immutable. Otherwise an attacker could change nonceB
  * after learning nonceA and grind new words through repeated acceptances. */

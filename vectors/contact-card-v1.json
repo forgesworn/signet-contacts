@@ -1,0 +1,449 @@
+{
+  "note": "Public deterministic test material. The card is presentation only: it is outside contactMessageHash, so a message hashes identically with and without it.",
+  "from": "1111111111111111111111111111111111111111111111111111111111111111",
+  "to": "2222222222222222222222222222222222222222222222222222222222222222",
+  "nonce": "3333333333333333333333333333333333333333333333333333333333333333",
+  "id": "44444444444444444444444444444444",
+  "commitment": "11dfd8049812007ef02bfb41603b9ba04f0bc9e81cfe5b5e044798714ce62d3a",
+  "request": {
+    "v": 1,
+    "id": "44444444444444444444444444444444",
+    "from": "1111111111111111111111111111111111111111111111111111111111111111",
+    "to": "2222222222222222222222222222222222222222222222222222222222222222",
+    "createdAt": 1700000000,
+    "type": "signet-contact-request",
+    "expiresAt": 1702592000,
+    "commitment": "11dfd8049812007ef02bfb41603b9ba04f0bc9e81cfe5b5e044798714ce62d3a",
+    "reply": {
+      "secret": "5555555555555555555555555555555555555555555555555555555555555555",
+      "relays": [
+        "wss://relay.example/"
+      ]
+    },
+    "card": {
+      "name": "Ada Lovelace",
+      "photo": {
+        "key": "8888888888888888888888888888888888888888888888888888888888888888",
+        "server": "https://blossom.example/",
+        "hash": "9999999999999999999999999999999999999999999999999999999999999999"
+      }
+    }
+  },
+  "acceptance": {
+    "v": 1,
+    "type": "signet-contact-accept",
+    "id": "44444444444444444444444444444444",
+    "from": "2222222222222222222222222222222222222222222222222222222222222222",
+    "to": "1111111111111111111111111111111111111111111111111111111111111111",
+    "createdAt": 1700000001,
+    "requestHash": "e10a88cb0834ba91ddda01ba58d5a9fb271ce60ac20409741603a5617054bf87",
+    "nonce": "6666666666666666666666666666666666666666666666666666666666666666",
+    "card": {
+      "name": "Grace Hopper"
+    }
+  },
+  "requestHash": "e10a88cb0834ba91ddda01ba58d5a9fb271ce60ac20409741603a5617054bf87",
+  "requestHashWithoutCard": "e10a88cb0834ba91ddda01ba58d5a9fb271ce60ac20409741603a5617054bf87",
+  "acceptanceHash": "1113e7d00bc162cb441ee1f0329eee508518517543b143a64aaa88529369009d",
+  "acceptanceHashWithoutCard": "1113e7d00bc162cb441ee1f0329eee508518517543b143a64aaa88529369009d",
+  "cardCases": [
+    {
+      "name": "name and photo",
+      "input": {
+        "name": "Ada Lovelace",
+        "photo": {
+          "key": "8888888888888888888888888888888888888888888888888888888888888888",
+          "server": "https://blossom.example/",
+          "hash": "9999999999999999999999999999999999999999999999999999999999999999"
+        }
+      },
+      "expected": {
+        "name": "Ada Lovelace",
+        "photo": {
+          "key": "8888888888888888888888888888888888888888888888888888888888888888",
+          "server": "https://blossom.example/",
+          "hash": "9999999999999999999999999999999999999999999999999999999999999999"
+        }
+      }
+    },
+    {
+      "name": "name only",
+      "input": {
+        "name": "Ada"
+      },
+      "expected": {
+        "name": "Ada"
+      }
+    },
+    {
+      "name": "photo only",
+      "input": {
+        "photo": {
+          "key": "8888888888888888888888888888888888888888888888888888888888888888",
+          "server": "https://blossom.example/",
+          "hash": "9999999999999999999999999999999999999999999999999999999999999999"
+        }
+      },
+      "expected": {
+        "photo": {
+          "key": "8888888888888888888888888888888888888888888888888888888888888888",
+          "server": "https://blossom.example/",
+          "hash": "9999999999999999999999999999999999999999999999999999999999999999"
+        }
+      }
+    },
+    {
+      "name": "server is normalised as a WHATWG URL href",
+      "input": {
+        "photo": {
+          "key": "8888888888888888888888888888888888888888888888888888888888888888",
+          "server": "https://Blossom.Example",
+          "hash": "9999999999999999999999999999999999999999999999999999999999999999"
+        }
+      },
+      "expected": {
+        "photo": {
+          "key": "8888888888888888888888888888888888888888888888888888888888888888",
+          "server": "https://blossom.example/",
+          "hash": "9999999999999999999999999999999999999999999999999999999999999999"
+        }
+      }
+    },
+    {
+      "name": "name has control and bidi characters stripped, then is trimmed",
+      "input": {
+        "name": "  \u202eAda\u0000 Lovelace\u2069 "
+      },
+      "expected": {
+        "name": "Ada Lovelace"
+      }
+    },
+    {
+      "name": "name of exactly 100 characters",
+      "input": {
+        "name": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "expected": {
+        "name": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      }
+    },
+    {
+      "name": "unknown card and photo fields are dropped",
+      "input": {
+        "name": "Ada",
+        "nickname": "x",
+        "photo": {
+          "key": "8888888888888888888888888888888888888888888888888888888888888888",
+          "server": "https://blossom.example/",
+          "hash": "9999999999999999999999999999999999999999999999999999999999999999",
+          "extra": 1
+        }
+      },
+      "expected": {
+        "name": "Ada",
+        "photo": {
+          "key": "8888888888888888888888888888888888888888888888888888888888888888",
+          "server": "https://blossom.example/",
+          "hash": "9999999999999999999999999999999999999999999999999999999999999999"
+        }
+      }
+    },
+    {
+      "name": "name of 101 characters is dropped, the photo survives",
+      "input": {
+        "name": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "photo": {
+          "key": "8888888888888888888888888888888888888888888888888888888888888888",
+          "server": "https://blossom.example/",
+          "hash": "9999999999999999999999999999999999999999999999999999999999999999"
+        }
+      },
+      "expected": {
+        "photo": {
+          "key": "8888888888888888888888888888888888888888888888888888888888888888",
+          "server": "https://blossom.example/",
+          "hash": "9999999999999999999999999999999999999999999999999999999999999999"
+        }
+      }
+    },
+    {
+      "name": "name that is empty after stripping is dropped",
+      "input": {
+        "name": " \u202e\u0007 ",
+        "photo": {
+          "key": "8888888888888888888888888888888888888888888888888888888888888888",
+          "server": "https://blossom.example/",
+          "hash": "9999999999999999999999999999999999999999999999999999999999999999"
+        }
+      },
+      "expected": {
+        "photo": {
+          "key": "8888888888888888888888888888888888888888888888888888888888888888",
+          "server": "https://blossom.example/",
+          "hash": "9999999999999999999999999999999999999999999999999999999999999999"
+        }
+      }
+    },
+    {
+      "name": "name that is not a string is dropped",
+      "input": {
+        "name": 7,
+        "photo": {
+          "key": "8888888888888888888888888888888888888888888888888888888888888888",
+          "server": "https://blossom.example/",
+          "hash": "9999999999999999999999999999999999999999999999999999999999999999"
+        }
+      },
+      "expected": {
+        "photo": {
+          "key": "8888888888888888888888888888888888888888888888888888888888888888",
+          "server": "https://blossom.example/",
+          "hash": "9999999999999999999999999999999999999999999999999999999999999999"
+        }
+      }
+    },
+    {
+      "name": "photo key in uppercase hex drops the photo",
+      "input": {
+        "name": "Ada",
+        "photo": {
+          "key": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+          "server": "https://blossom.example/",
+          "hash": "9999999999999999999999999999999999999999999999999999999999999999"
+        }
+      },
+      "expected": {
+        "name": "Ada"
+      }
+    },
+    {
+      "name": "photo hash of the wrong length drops the photo",
+      "input": {
+        "name": "Ada",
+        "photo": {
+          "key": "8888888888888888888888888888888888888888888888888888888888888888",
+          "server": "https://blossom.example/",
+          "hash": "999999999999999999999999999999999999999999999999999999999999999"
+        }
+      },
+      "expected": {
+        "name": "Ada"
+      }
+    },
+    {
+      "name": "photo server over http drops the photo",
+      "input": {
+        "name": "Ada",
+        "photo": {
+          "key": "8888888888888888888888888888888888888888888888888888888888888888",
+          "server": "http://blossom.example/",
+          "hash": "9999999999999999999999999999999999999999999999999999999999999999"
+        }
+      },
+      "expected": {
+        "name": "Ada"
+      }
+    },
+    {
+      "name": "photo server with credentials drops the photo",
+      "input": {
+        "name": "Ada",
+        "photo": {
+          "key": "8888888888888888888888888888888888888888888888888888888888888888",
+          "server": "https://u:p@blossom.example/",
+          "hash": "9999999999999999999999999999999999999999999999999999999999999999"
+        }
+      },
+      "expected": {
+        "name": "Ada"
+      }
+    },
+    {
+      "name": "photo server with a fragment drops the photo",
+      "input": {
+        "name": "Ada",
+        "photo": {
+          "key": "8888888888888888888888888888888888888888888888888888888888888888",
+          "server": "https://blossom.example/#x",
+          "hash": "9999999999999999999999999999999999999999999999999999999999999999"
+        }
+      },
+      "expected": {
+        "name": "Ada"
+      }
+    },
+    {
+      "name": "photo server over 512 characters drops the photo",
+      "input": {
+        "name": "Ada",
+        "photo": {
+          "key": "8888888888888888888888888888888888888888888888888888888888888888",
+          "server": "https://blossom.example/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "hash": "9999999999999999999999999999999999999999999999999999999999999999"
+        }
+      },
+      "expected": {
+        "name": "Ada"
+      }
+    },
+    {
+      "name": "photo server that is not a URL drops the photo",
+      "input": {
+        "name": "Ada",
+        "photo": {
+          "key": "8888888888888888888888888888888888888888888888888888888888888888",
+          "server": "blossom",
+          "hash": "9999999999999999999999999999999999999999999999999999999999999999"
+        }
+      },
+      "expected": {
+        "name": "Ada"
+      }
+    },
+    {
+      "name": "photo missing a field drops the photo",
+      "input": {
+        "name": "Ada",
+        "photo": {
+          "key": "8888888888888888888888888888888888888888888888888888888888888888",
+          "hash": "9999999999999999999999999999999999999999999999999999999999999999"
+        }
+      },
+      "expected": {
+        "name": "Ada"
+      }
+    },
+    {
+      "name": "a card left with nothing valid is dropped",
+      "input": {
+        "name": "",
+        "photo": {
+          "key": "zz",
+          "server": "https://blossom.example/",
+          "hash": "9999999999999999999999999999999999999999999999999999999999999999"
+        }
+      },
+      "expected": null
+    },
+    {
+      "name": "an empty card is dropped",
+      "input": {},
+      "expected": null
+    },
+    {
+      "name": "a card that is not an object is dropped",
+      "input": "Ada",
+      "expected": null
+    },
+    {
+      "name": "a card over 1024 bytes of JSON is dropped",
+      "input": {
+        "name": "Ada",
+        "pad": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      },
+      "expected": null
+    }
+  ],
+  "messageCases": [
+    {
+      "name": "request with a valid card",
+      "raw": "{\"v\":1,\"id\":\"44444444444444444444444444444444\",\"from\":\"1111111111111111111111111111111111111111111111111111111111111111\",\"to\":\"2222222222222222222222222222222222222222222222222222222222222222\",\"createdAt\":1700000000,\"type\":\"signet-contact-request\",\"expiresAt\":1702592000,\"commitment\":\"11dfd8049812007ef02bfb41603b9ba04f0bc9e81cfe5b5e044798714ce62d3a\",\"reply\":{\"secret\":\"5555555555555555555555555555555555555555555555555555555555555555\",\"relays\":[\"wss://relay.example/\"]},\"card\":{\"name\":\"Ada Lovelace\",\"photo\":{\"key\":\"8888888888888888888888888888888888888888888888888888888888888888\",\"server\":\"https://blossom.example/\",\"hash\":\"9999999999999999999999999999999999999999999999999999999999999999\"}}}",
+      "expected": {
+        "v": 1,
+        "id": "44444444444444444444444444444444",
+        "from": "1111111111111111111111111111111111111111111111111111111111111111",
+        "to": "2222222222222222222222222222222222222222222222222222222222222222",
+        "createdAt": 1700000000,
+        "type": "signet-contact-request",
+        "expiresAt": 1702592000,
+        "commitment": "11dfd8049812007ef02bfb41603b9ba04f0bc9e81cfe5b5e044798714ce62d3a",
+        "reply": {
+          "secret": "5555555555555555555555555555555555555555555555555555555555555555",
+          "relays": [
+            "wss://relay.example/"
+          ]
+        },
+        "card": {
+          "name": "Ada Lovelace",
+          "photo": {
+            "key": "8888888888888888888888888888888888888888888888888888888888888888",
+            "server": "https://blossom.example/",
+            "hash": "9999999999999999999999999999999999999999999999999999999999999999"
+          }
+        }
+      }
+    },
+    {
+      "name": "request with an invalid card still parses, without the card",
+      "raw": "{\"v\":1,\"id\":\"44444444444444444444444444444444\",\"from\":\"1111111111111111111111111111111111111111111111111111111111111111\",\"to\":\"2222222222222222222222222222222222222222222222222222222222222222\",\"createdAt\":1700000000,\"type\":\"signet-contact-request\",\"expiresAt\":1702592000,\"commitment\":\"11dfd8049812007ef02bfb41603b9ba04f0bc9e81cfe5b5e044798714ce62d3a\",\"reply\":{\"secret\":\"5555555555555555555555555555555555555555555555555555555555555555\",\"relays\":[\"wss://relay.example/\"]},\"card\":{\"name\":7,\"photo\":{\"key\":\"nope\"}}}",
+      "expected": {
+        "v": 1,
+        "id": "44444444444444444444444444444444",
+        "from": "1111111111111111111111111111111111111111111111111111111111111111",
+        "to": "2222222222222222222222222222222222222222222222222222222222222222",
+        "createdAt": 1700000000,
+        "type": "signet-contact-request",
+        "expiresAt": 1702592000,
+        "commitment": "11dfd8049812007ef02bfb41603b9ba04f0bc9e81cfe5b5e044798714ce62d3a",
+        "reply": {
+          "secret": "5555555555555555555555555555555555555555555555555555555555555555",
+          "relays": [
+            "wss://relay.example/"
+          ]
+        }
+      }
+    },
+    {
+      "name": "request with an oversized card still parses, without the card",
+      "raw": "{\"v\":1,\"id\":\"44444444444444444444444444444444\",\"from\":\"1111111111111111111111111111111111111111111111111111111111111111\",\"to\":\"2222222222222222222222222222222222222222222222222222222222222222\",\"createdAt\":1700000000,\"type\":\"signet-contact-request\",\"expiresAt\":1702592000,\"commitment\":\"11dfd8049812007ef02bfb41603b9ba04f0bc9e81cfe5b5e044798714ce62d3a\",\"reply\":{\"secret\":\"5555555555555555555555555555555555555555555555555555555555555555\",\"relays\":[\"wss://relay.example/\"]},\"card\":{\"name\":\"Ada\",\"pad\":\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"}}",
+      "expected": {
+        "v": 1,
+        "id": "44444444444444444444444444444444",
+        "from": "1111111111111111111111111111111111111111111111111111111111111111",
+        "to": "2222222222222222222222222222222222222222222222222222222222222222",
+        "createdAt": 1700000000,
+        "type": "signet-contact-request",
+        "expiresAt": 1702592000,
+        "commitment": "11dfd8049812007ef02bfb41603b9ba04f0bc9e81cfe5b5e044798714ce62d3a",
+        "reply": {
+          "secret": "5555555555555555555555555555555555555555555555555555555555555555",
+          "relays": [
+            "wss://relay.example/"
+          ]
+        }
+      }
+    },
+    {
+      "name": "acceptance with a valid card",
+      "raw": "{\"v\":1,\"type\":\"signet-contact-accept\",\"id\":\"44444444444444444444444444444444\",\"from\":\"2222222222222222222222222222222222222222222222222222222222222222\",\"to\":\"1111111111111111111111111111111111111111111111111111111111111111\",\"createdAt\":1700000001,\"requestHash\":\"e10a88cb0834ba91ddda01ba58d5a9fb271ce60ac20409741603a5617054bf87\",\"nonce\":\"6666666666666666666666666666666666666666666666666666666666666666\",\"card\":{\"name\":\"Grace Hopper\"}}",
+      "expected": {
+        "v": 1,
+        "id": "44444444444444444444444444444444",
+        "from": "2222222222222222222222222222222222222222222222222222222222222222",
+        "to": "1111111111111111111111111111111111111111111111111111111111111111",
+        "createdAt": 1700000001,
+        "type": "signet-contact-accept",
+        "requestHash": "e10a88cb0834ba91ddda01ba58d5a9fb271ce60ac20409741603a5617054bf87",
+        "nonce": "6666666666666666666666666666666666666666666666666666666666666666",
+        "card": {
+          "name": "Grace Hopper"
+        }
+      }
+    },
+    {
+      "name": "reveal never carries a card",
+      "raw": "{\"v\":1,\"type\":\"signet-contact-reveal\",\"id\":\"44444444444444444444444444444444\",\"from\":\"1111111111111111111111111111111111111111111111111111111111111111\",\"to\":\"2222222222222222222222222222222222222222222222222222222222222222\",\"createdAt\":1700000002,\"requestHash\":\"e10a88cb0834ba91ddda01ba58d5a9fb271ce60ac20409741603a5617054bf87\",\"acceptanceHash\":\"1113e7d00bc162cb441ee1f0329eee508518517543b143a64aaa88529369009d\",\"nonce\":\"3333333333333333333333333333333333333333333333333333333333333333\",\"card\":{\"name\":\"Grace Hopper\"}}",
+      "expected": {
+        "v": 1,
+        "id": "44444444444444444444444444444444",
+        "from": "1111111111111111111111111111111111111111111111111111111111111111",
+        "to": "2222222222222222222222222222222222222222222222222222222222222222",
+        "createdAt": 1700000002,
+        "type": "signet-contact-reveal",
+        "requestHash": "e10a88cb0834ba91ddda01ba58d5a9fb271ce60ac20409741603a5617054bf87",
+        "acceptanceHash": "1113e7d00bc162cb441ee1f0329eee508518517543b143a64aaa88529369009d",
+        "nonce": "3333333333333333333333333333333333333333333333333333333333333333"
+      }
+    }
+  ]
+}

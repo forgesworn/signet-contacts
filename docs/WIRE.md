@@ -30,7 +30,7 @@ negotiated.
 | App-introduction request | `1` | kind `30078`, app → rail, NIP-44 | `d` = `signet:contacts:app-invite:<grantId>` | **readable** | App introductions; `src/wire/app-invite.ts` |
 | App-introduction reply | `1` | kind `30078`, rail → app, NIP-44 | `d` = `signet:contacts:app-invite:<grantId>:<requestId>` | **readable** | App introductions; `src/wire/app-invite.ts` |
 | Contact invite | `1` | QR code or link, not an event | — | — | `docs/contact-invite-v1.md`; `src/wire/invite.ts` |
-| Contact request / acceptance / reveal | `1` | kind-13 seal inside a sealed packet inside kind `1059` | `["p", mailboxPubkey]` | readable (the mailbox key is derived from the invite secret, so it means something only to invite holders) | `docs/contact-invite-v1.md`; `src/wire/invite.ts` |
+| Contact request / acceptance / reveal | `1` | kind-13 seal inside a sealed packet inside kind `1059` | `["p", mailboxPubkey]` | readable (the mailbox key is derived from the invite secret, so it means something only to invite holders) | `docs/contact-invite-v1.md`; `src/wire/invite.ts`. A request or acceptance may carry an optional `card` (name and photo pointer) that no hash covers; older parsers drop it |
 | Sealed contact packet | `1` | inner layer of that kind `1059` | — | — | `docs/contact-invite-v1.md`; `src/adapters/invite-nostr-tools.ts` |
 | Channel-check request / accept / reveal | `1` | the host app's own authenticated channel | — | — | `docs/channel-check-v1.md` — **draft, outside this contract** |
 
