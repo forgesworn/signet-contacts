@@ -78,7 +78,7 @@ it('carries an optional card on request and acceptance, normalised, and hashes i
 it('never lets a card reach a reveal and never lets a bad card invalidate a message', () => {
   const { request, acceptance, reveal } = exchange();
   expect('card' in parseContactExchangeMessage(JSON.stringify({ ...reveal, card }))!).toBe(false);
-  for (const bad of [{ name: 7 }, { photo: { key: 'x' } }, { name: 'Ada', pad: 'x'.repeat(2000) }, 'Ada', 7, null, [], {}]) {
+  for (const bad of [{ name: 7 }, { photo: { key: 'x' } }, 'Ada', 7, null, [], {}, { name: '\u200b\u2060' }, { photo: { ...card.photo, server: 'https://blossom.example/?q=1' } }]) {
     const parsed = parseContactExchangeMessage(JSON.stringify({ ...request, card: bad }));
     expect(parsed).not.toBeNull();
     expect(contactMessageHash(parsed!)).toBe(contactMessageHash(request));
@@ -97,17 +97,33 @@ it('parses a card strictly: allowlist, name stripping and limits, photo validity
   expect(parseContactCard({ photo: { ...card.photo, server: `https://b.example/${'a'.repeat(500)}` } })).toBeNull();
   expect(parseContactCard({ ...card, extra: 1, photo: { ...card.photo, extra: 1 } })).toEqual(card);
   expect(parseContactCard(parseContactCard(card))).toEqual(card);
-  // 1024 bytes of JSON is the ceiling, counted as received.
-  const pad = (n: number) => ({ name: 'Ada', pad: 'x'.repeat(n) });
-  const slack = 1024 - JSON.stringify(pad(0)).length;
-  expect(parseContactCard(pad(slack))).toEqual({ name: 'Ada' });
-  expect(parseContactCard(pad(slack + 1))).toBeNull();
+  // Unknown fields are never counted: a future card field cannot cost a 0.2.0 parser the name or photo.
+  expect(parseContactCard({ ...card, pad: 'x'.repeat(5000) })).toEqual(card);
+  expect(parseContactCard({ name: 'Ada', pad: 'x'.repeat(5000) })).toEqual({ name: 'Ada' });
+  // The one bound is 1024 bytes of compact JSON of the NORMALISED known fields.
+  const heavy = { name: '\u{1F600}'.repeat(100), photo: { ...card.photo, server: `https://blossom.example/${'a'.repeat(470)}` } };
+  expect(new TextEncoder().encode(JSON.stringify(heavy)).length).toBeGreaterThan(1024);
+  expect(parseContactCard(heavy)).toBeNull();
+  expect(parseContactCard({ ...heavy, name: '\u{1F600}'.repeat(50) })).not.toBeNull();
+  // Names: the library sanitiser's set, then visible-character and well-formedness checks.
+  for (const bad of ['\u200b', '\u200b\u200d', '\u2060', '\u00ad', '\u3164', '\u034f', '\u180e', '\ufeff', '\u00a0\u3000', '\ud800ab', 'ab\udc00']) {
+    expect(parseContactCard({ name: bad }), JSON.stringify(bad)).toBeNull();
+  }
+  expect(parseContactCard({ name: 'Mum\nDad' })).toEqual({ name: 'MumDad' });
+  expect(parseContactCard({ name: 'Mum\u2028Dad' })).toEqual({ name: 'MumDad' });
+  expect(parseContactCard({ name: '\ufeff\u00a0\u3000Ada\u2003' })).toEqual({ name: 'Ada' });
+  expect(parseContactCard({ name: '\u{1F600}'.repeat(100) })).toEqual({ name: '\u{1F600}'.repeat(100) });
+  expect(parseContactCard({ name: '\u{1F600}'.repeat(101) })).toBeNull();
+  for (const server of ['https://blossom.example/#', 'https://blossom.example/?', 'https://blossom.example/?q=1', 'https://blossom.example/a?b#c']) {
+    expect(parseContactCard({ name: 'Ada', photo: { ...card.photo, server } }), server).toEqual({ name: 'Ada' });
+  }
+  expect(parseContactCard({ photo: { ...card.photo, server: `https://blossom.example/${'\u00fc'.repeat(150)}` } })).toBeNull();
   expect(parseContactCard(undefined)).toBeNull();
 });
 it('throws on an invalid card at create time', () => {
   const request = createContactRequest(reqArgs);
   for (const bad of [{}, { name: '' }, { name: 'a'.repeat(101) }, { name: 'Ada', photo: { ...card.photo, key: 'nope' } },
-    { photo: { ...card.photo, server: 'http://blossom.example/' } }, { name: 'Ada', pad: 'x'.repeat(2000) }] as unknown as Array<typeof card>) {
+    { photo: { ...card.photo, server: 'http://blossom.example/' } }, { name: '\u200b' }] as unknown as Array<typeof card>) {
     expect(() => createContactRequest({ ...reqArgs, card: bad })).toThrow('Invalid contact card');
     expect(() => createContactAcceptance(request, '6'.repeat(64), request.createdAt + 1, bad)).toThrow('Invalid contact card');
   }

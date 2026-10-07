@@ -56,18 +56,30 @@ to a photo the sender chooses to share. It is never on the reveal.
 card?: { name?: string; photo?: { key: string; server: string; hash: string } }
 ```
 
-- `name`: remove control characters (U+0000–U+001F, U+007F–U+009F) and bidi
-  characters (U+061C, U+200E, U+200F, U+202A–U+202E, U+2066–U+2069), trim, then
-  require 1–100 characters (UTF-16 code units). Otherwise drop `name`.
+- `name`: strip with the wire's one sanitiser (`sanitizeWireText`, `src/wire/ids.ts`):
+  remove U+0000–U+001F, U+007F–U+009F, U+200B–U+200F, U+2028–U+202E and
+  U+2066–U+2069 (so line breaks and zero-width characters are removed, not kept:
+  `Mum\nDad` becomes `MumDad`), then trim (ECMAScript `String.prototype.trim`: the
+  WhiteSpace and LineTerminator sets, including U+FEFF, U+00A0 and U+3000). Then the
+  card **drops rather than truncates**: the name must be 1–100 **code points**
+  (counted as the sanitiser counts, so an astral character is one), must contain
+  at least one character that is neither `Default_Ignorable_Code_Point` nor
+  `White_Space`, and must contain no lone surrogate (checked on the input, before
+  stripping). Otherwise drop `name`.
 - `photo.key` and `photo.hash`: exactly 64 lowercase hex. `key` decrypts the blob
   whose SHA-256 is `hash`.
 - `photo.server`: a URL that parses, is `https:`, has no username, password or
-  fragment, and is at most 512 characters. It is stored as the WHATWG URL
-  serialisation (`href`), which must also fit in 512 characters.
-- Parsing is a strict allowlist: unknown card and photo fields are dropped. An
-  invalid `photo` drops `photo` only; a card left with no valid field is dropped;
-  a card whose JSON exceeds 1024 bytes, as received or once normalised, is
-  dropped. **An invalid card never invalidates the message.**
+  fragment (a bare `#` counts), **and no query (a bare `?` counts)**, and is at
+  most 512 characters. It is stored as the WHATWG URL serialisation (`href`),
+  which must also fit in 512 characters. It is a base URL: the blob is fetched
+  from `<server without its trailing slashes>/<hash>`.
+- Parsing is a strict allowlist: unknown card and photo fields are dropped and
+  **never counted**, so a later card field cannot make a parser drop `name` or
+  `photo`. An invalid `photo` drops `photo` only; a card left with no valid field
+  is dropped. The one size bound applies to the normalised card, known fields
+  only: serialise `{"name":…,"photo":{"key":…,"server":…,"hash":…}}` (that key
+  order, present fields only, no whitespace) as UTF-8 JSON; more than 1024 bytes
+  drops the whole card. **An invalid card never invalidates the message.**
 - `createContactRequest({ …, card })` and `createContactAcceptance(request, nonce,
   now, card)` validate on create and throw `Invalid contact card`: a bad card from
   your own code is a bug, not input. An acceptance never inherits the requester's
@@ -84,8 +96,18 @@ card.
 message, not from the card or the transcript. The adapter verifies the seal and
 requires `message.from` to equal the seal signer, and `message.to` to equal the
 decrypting identity. Treat the name as self-declared: anyone holding the invite
-can claim any name. Do not fetch `photo.server` before the user has accepted the
-exchange. Vectors: `vectors/contact-card-v1.json`.
+can claim any name.
+
+**First card wins.** A message is identified by its hash, which the card is not
+part of, so a second copy of the same request or acceptance with a different card
+is the same message and the first card stays (the state machine keeps the first).
+To resend, send the stored message again; never re-create it with a new card.
+
+**Fetching the photo.** Do not fetch `photo.server` before the user has accepted
+the exchange. The library does not check the host: an application MUST refuse IP
+literals and loopback, private, link-local and single-label hosts before any
+fetch, and re-check after DNS resolution where it can, because the sender chose
+the server. Vectors: `vectors/contact-card-v1.json`.
 
 ## Encrypted transport
 

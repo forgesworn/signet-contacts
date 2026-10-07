@@ -7,10 +7,11 @@
   `card: { name?, photo?: { key, server, hash } }`, a self-declared name and a
   pointer to an encrypted photo the sender chooses to share, so the other side
   can show a face and a name once the exchange completes. Never on the reveal.
-  The parser is a strict allowlist (name stripped of control and bidi
-  characters and limited to 1–100 characters; `key`/`hash` 64 lowercase hex;
-  `server` an `https:` URL of at most 512 characters with no credentials or
-  fragment; the whole card at most 1024 bytes of JSON), and **an invalid card is
+  The parser is a strict allowlist (name run through the wire's one
+  sanitiser, trimmed, then 1–100 code points with at least one visible
+  character; `key`/`hash` 64 lowercase hex; `server` an `https:` base URL of at
+  most 512 characters with no credentials, query or fragment; the normalised
+  known fields at most 1024 bytes of JSON, unknown fields never counted), and **an invalid card is
   dropped without invalidating the message**. The card is **excluded from
   `contactMessageHash`**, so every `requestHash`, `acceptanceHash`,
   commitment and set of verification words is byte-identical with or without it,

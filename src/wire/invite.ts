@@ -3,6 +3,7 @@ import { sha256 } from '@noble/hashes/sha2.js';
 import { hkdf } from '@noble/hashes/hkdf.js';
 import { bytesToHex, hexToBytes, utf8ToBytes } from '@noble/hashes/utils.js';
 import { deriveDirectionalPair } from 'spoken-token';
+import { sanitizeWireText } from './ids.js';
 
 export const CONTACT_REQUEST_TTL = 30 * 24 * 60 * 60;
 export const CONTACT_MESSAGE_MAX_BYTES = 8192;
@@ -66,17 +67,26 @@ function mailbox(value: unknown): ContactMailbox | null {
   const urls = relays(value.relays);
   return urls ? { secret: value.secret, relays: urls } : null;
 }
-const NAME_STRIP = /[\u0000-\u001f\u007f-\u009f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/gu;
+// A lone surrogate is not text (and is not valid UTF-8 on the wire); written out
+// by hand because String.prototype.isWellFormed needs Node 20 and engines says 18.
+const LONE_SURROGATE = /[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/;
+const VISIBLE = /[^\p{Default_Ignorable_Code_Point}\p{White_Space}]/u;
+/** The library's own sanitiser (R-6: the only one on this wire) strips and trims; the
+ * card then DROPS rather than truncates, and counts code points as that sanitiser does. */
 function cardName(value: unknown): string | null {
-  if (typeof value !== 'string') return null;
-  const name = value.replace(NAME_STRIP, '').trim();
-  return name.length >= 1 && name.length <= CONTACT_CARD_NAME_MAX ? name : null;
+  if (typeof value !== 'string' || LONE_SURROGATE.test(value)) return null;
+  const name = sanitizeWireText(value, CONTACT_CARD_NAME_MAX + 1);
+  const length = Array.from(name).length;
+  return length >= 1 && length <= CONTACT_CARD_NAME_MAX && VISIBLE.test(name) ? name : null;
 }
+// `server` is a base URL the receiver appends `/<hash>` to, so a query or any
+// fragment (even a bare `#`, which WHATWG reports as an empty hash) is refused.
 function cardServer(value: unknown): string | null {
-  if (typeof value !== 'string' || value.length > CONTACT_CARD_SERVER_MAX) return null;
+  if (typeof value !== 'string' || value.length > CONTACT_CARD_SERVER_MAX || value.includes('#') || value.includes('?')) return null;
   try {
     const url = new URL(value);
-    if (url.protocol !== 'https:' || url.username || url.password || url.hash || url.href.length > CONTACT_CARD_SERVER_MAX) return null;
+    if (url.protocol !== 'https:' || url.username || url.password || url.hash || url.search
+      || url.href.length > CONTACT_CARD_SERVER_MAX) return null;
     return url.href;
   } catch { return null; }
 }
@@ -87,12 +97,13 @@ function cardPhoto(value: unknown): ContactCardPhoto | null {
 }
 const jsonBytes = (v: unknown): number => new TextEncoder().encode(JSON.stringify(v)).length;
 /** Lenient reader for a card as received. Never throws: an invalid `name` or
- * `photo` is dropped on its own, unknown fields are dropped, and a card left
- * with nothing valid, or whose JSON exceeds 1024 bytes (as received or once
- * normalised), is `null`. A bad card must never invalidate the message. */
+ * `photo` is dropped on its own, unknown fields are dropped (and never counted,
+ * so a later card field cannot make this parser drop `name` or `photo`), and a
+ * card left with nothing valid, or whose NORMALISED known fields serialise to
+ * more than 1024 bytes of compact JSON, is `null`. A bad card never invalidates
+ * the message. */
 export function parseContactCard(value: unknown): ContactCard | null {
   if (!object(value)) return null;
-  try { if (jsonBytes(value) > CONTACT_CARD_MAX_BYTES) return null; } catch { return null; }
   const card: ContactCard = {};
   const name = value.name === undefined ? null : cardName(value.name);
   if (name !== null) card.name = name;

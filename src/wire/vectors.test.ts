@@ -394,10 +394,6 @@ describe('vectors', () => {
     });
   });
 
-  // Fix round 1. Runs after every `frozen()` call above has written its file
-  // for this test run (vitest runs `it`s within one `describe` in declaration
-  // order), and reads the files back as raw BYTES rather than a decoded
-  // string, so an escaping regression cannot hide behind a lenient decoder.
   it('freezes the contact card on request and accept, and the cases a parser must drop (card is outside every hash)', () => {
     const from = '1'.repeat(64), to = '2'.repeat(64), nonce = '3'.repeat(64);
     const id = '4'.repeat(32), reply = { secret: '5'.repeat(64), relays: ['wss://relay.example'] };
@@ -420,28 +416,43 @@ describe('vectors', () => {
       ['photo only', { photo: photo({}) }],
       ['server is normalised as a WHATWG URL href', { photo: photo({ server: 'https://Blossom.Example' }) }],
       ['name has control and bidi characters stripped, then is trimmed', { name: '  \u202eAda\u0000 Lovelace\u2069 ' }],
+      ['name line breaks are stripped, not kept', { name: 'Mum\nDad' }],
+      ['name zero-width characters are stripped', { name: 'A\u200bd\u200da' }],
+      ['name is trimmed of ECMAScript white space, including U+FEFF, NBSP and U+3000', { name: '\ufeff\u00a0\u3000Ada\u2003' }],
+      ['name of exactly 100 code points (astral characters count once)', { name: '\u{1F600}'.repeat(100) }],
+      ['name of 101 code points is dropped', { name: '\u{1F600}'.repeat(101), photo: photo({}) }],
       ['name of exactly 100 characters', { name: 'a'.repeat(100) }],
       ['unknown card and photo fields are dropped', { name: 'Ada', nickname: 'x', photo: photo({ extra: 1 }) }],
       ['name of 101 characters is dropped, the photo survives', { name: 'a'.repeat(101), photo: photo({}) }],
       ['name that is empty after stripping is dropped', { name: ' \u202e\u0007 ', photo: photo({}) }],
       ['name that is not a string is dropped', { name: 7, photo: photo({}) }],
+      ['zero-width-only name is dropped', { name: '\u200b\u200d', photo: photo({}) }],
+      ['name of only default-ignorable characters is dropped (U+2060, U+00AD, U+3164)', { name: '\u2060\u00ad\u3164', photo: photo({}) }],
+      ['name of only white space is dropped (U+FEFF, NBSP, U+3000)', { name: '\ufeff\u00a0\u3000', photo: photo({}) }],
+      ['name with a lone surrogate is dropped', { name: '\ud800ab', photo: photo({}) }],
       ['photo key in uppercase hex drops the photo', { name: 'Ada', photo: photo({ key: 'A'.repeat(64) }) }],
       ['photo hash of the wrong length drops the photo', { name: 'Ada', photo: photo({ hash: '9'.repeat(63) }) }],
       ['photo server over http drops the photo', { name: 'Ada', photo: photo({ server: 'http://blossom.example/' }) }],
       ['photo server with credentials drops the photo', { name: 'Ada', photo: photo({ server: 'https://u:p@blossom.example/' }) }],
       ['photo server with a fragment drops the photo', { name: 'Ada', photo: photo({ server: 'https://blossom.example/#x' }) }],
       ['photo server over 512 characters drops the photo', { name: 'Ada', photo: photo({ server: `https://blossom.example/${'a'.repeat(512)}` }) }],
+      ['photo server with a bare # drops the photo', { name: 'Ada', photo: photo({ server: 'https://blossom.example/#' }) }],
+      ['photo server with a query drops the photo', { name: 'Ada', photo: photo({ server: 'https://blossom.example/?q=1' }) }],
+      ['photo server with an empty query drops the photo', { name: 'Ada', photo: photo({ server: 'https://blossom.example/?' }) }],
+      ['photo server whose normalised href exceeds 512 characters drops the photo', { name: 'Ada', photo: photo({ server: `https://blossom.example/${'\u00fc'.repeat(150)}` }) }],
       ['photo server that is not a URL drops the photo', { name: 'Ada', photo: photo({ server: 'blossom' }) }],
       ['photo missing a field drops the photo', { name: 'Ada', photo: { key: '8'.repeat(64), hash: '9'.repeat(64) } }],
       ['a card left with nothing valid is dropped', { name: '', photo: photo({ key: 'zz' }) }],
       ['an empty card is dropped', {}],
       ['a card that is not an object is dropped', 'Ada'],
-      ['a card over 1024 bytes of JSON is dropped', { name: 'Ada', pad: 'x'.repeat(1100) }],
+      ['unknown fields are never counted: a large one does not cost the name', { name: 'Ada', pad: 'x'.repeat(1100) }],
+      ['unknown fields are never counted: nor the photo', { name: 'Ada', photo: photo({}), pad: 'x'.repeat(1100) }],
+      ['a card whose normalised known fields exceed 1024 bytes of compact JSON is dropped', { name: '\u{1F600}'.repeat(100), photo: photo({ server: `https://blossom.example/${'a'.repeat(470)}` }) }],
     ];
     const messageCases: Array<[string, string]> = [
       ['request with a valid card', JSON.stringify(request)],
       ['request with an invalid card still parses, without the card', JSON.stringify({ ...request, card: { name: 7, photo: { key: 'nope' } } })],
-      ['request with an oversized card still parses, without the card', JSON.stringify({ ...request, card: { name: 'Ada', pad: 'x'.repeat(1100) } })],
+      ['request with an oversized unknown card field still parses, keeping the known fields', JSON.stringify({ ...request, card: { name: 'Ada', pad: 'x'.repeat(1100) } })],
       ['acceptance with a valid card', JSON.stringify(acceptance)],
       ['reveal never carries a card', JSON.stringify({ ...reveal, card: acceptCard })],
     ];
@@ -457,6 +468,10 @@ describe('vectors', () => {
     frozen('vectors/contact-card-v1.json', out);
   });
 
+  // Fix round 1. Runs after every `frozen()` call above has written its file
+  // for this test run (vitest runs `it`s within one `describe` in declaration
+  // order), and reads the files back as raw BYTES rather than a decoded
+  // string, so an escaping regression cannot hide behind a lenient decoder.
   it('never puts a raw non-ASCII byte or an unescaped control character in a frozen vector file', () => {
     const files = [
       'vectors/pairing.v2.json',
@@ -480,5 +495,5 @@ describe('vectors', () => {
         expect(byte, `${path} byte ${i} must not be DEL (0x7f)`).not.toBe(0x7f);
       }
     }
-  });
+  }, 30_000);
 });
