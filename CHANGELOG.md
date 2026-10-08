@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+- **Feature (wire, additive): an optional `card` on contact requests and
+  acceptances.** A request or an acceptance may carry
+  `card: { name?, photo?: { key, server, hash } }`, a self-declared name and a
+  pointer to an encrypted photo the sender chooses to share, so the other side
+  can show a face and a name once the exchange completes. Never on the reveal.
+  The parser is a strict allowlist (name run through the wire's one
+  sanitiser, trimmed, then 1–100 code points with at least one visible
+  character; `key`/`hash` 64 lowercase hex; `server` an `https:` base URL of at
+  most 512 characters with no credentials, query or fragment; the normalised
+  known fields at most 1024 bytes of JSON, unknown fields never counted), and **an invalid card is
+  dropped without invalidating the message**. The card is **excluded from
+  `contactMessageHash`**, so every `requestHash`, `acceptanceHash`,
+  commitment and set of verification words is byte-identical with or without it,
+  and an older parser that drops the field agrees on all of them. Existing
+  vectors are unchanged; `vectors/contact-card-v1.json` is new. New exports:
+  `parseContactCard`, `ContactCard`, `ContactCardPhoto`, the
+  `CONTACT_CARD_*` limits; `createContactRequest` takes `card`,
+  `createContactAcceptance` and `acceptContactExchange` take a trailing `card`,
+  each throwing on an invalid card. Package version 0.2.0. See
+  `docs/contact-invite-v1.md`.
+
 - **Fix: a stored copy of the pairing ack, so a backgrounded consumer app can
   still find it.** Field-proven 2026-09-27 (OnePlus 8T): an app that is
   ALWAYS backgrounded when the owner approves in Signet has its socket

@@ -1,6 +1,6 @@
 {
   "name": "@forgesworn/signet-contacts",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "The v2 wire for application access to Signet contacts: capability-scoped pairing, per-grant encrypted projections, and app proposals.",
   "type": "module",
   "main": "./dist/index.js",

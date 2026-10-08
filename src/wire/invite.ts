@@ -3,6 +3,7 @@ import { sha256 } from '@noble/hashes/sha2.js';
 import { hkdf } from '@noble/hashes/hkdf.js';
 import { bytesToHex, hexToBytes, utf8ToBytes } from '@noble/hashes/utils.js';
 import { deriveDirectionalPair } from 'spoken-token';
+import { sanitizeWireText } from './ids.js';
 
 export const CONTACT_REQUEST_TTL = 30 * 24 * 60 * 60;
 export const CONTACT_MESSAGE_MAX_BYTES = 8192;
@@ -10,6 +11,9 @@ export const CONTACT_IDENTITY_DECRYPTS_PER_UNLOCK = 32;
 export const CONTACT_INVITE_PENDING_LIMIT = 128;
 export const CONTACT_SENDER_PENDING_LIMIT = 8;
 export const CONTACT_AUTO_ACCEPT_SECONDS = 300;
+export const CONTACT_CARD_MAX_BYTES = 1024;
+export const CONTACT_CARD_NAME_MAX = 100;
+export const CONTACT_CARD_SERVER_MAX = 512;
 export const CONTACT_WORDS_NAMESPACE = 'signet-contacts:exchange:v1';
 const MAILBOX_NAMESPACE = 'signet-contacts:mailbox:v1';
 const HEX32 = /^[0-9a-f]{64}$/;
@@ -22,13 +26,20 @@ export interface ContactMailbox { secret: string; relays: string[] }
 export interface ContactInvite extends ContactMailbox {
   v: 1; recipient: string; expiresAt?: number; caption?: string;
 }
+/** Where a sender's shared photo lives: `key` decrypts the blob at `hash` on the
+ * Blossom `server`. Never fetched before the exchange completes. */
+export interface ContactCardPhoto { key: string; server: string; hash: string }
+/** Optional, self-declared presentation. Authentic only via the persona-signed
+ * seal, never part of any transcript hash, and dropped by older parsers. */
+export interface ContactCard { name?: string; photo?: ContactCardPhoto }
 export interface ContactRequest {
   v: 1; type: 'signet-contact-request'; id: string; from: string; to: string;
   createdAt: number; expiresAt: number; commitment: string; reply: ContactMailbox;
+  card?: ContactCard;
 }
 export interface ContactAcceptance {
   v: 1; type: 'signet-contact-accept'; id: string; from: string; to: string;
-  createdAt: number; requestHash: string; nonce: string;
+  createdAt: number; requestHash: string; nonce: string; card?: ContactCard;
 }
 export interface ContactReveal {
   v: 1; type: 'signet-contact-reveal'; id: string; from: string; to: string;
@@ -55,6 +66,59 @@ function mailbox(value: unknown): ContactMailbox | null {
   if (!object(value) || !hex(value.secret)) return null;
   const urls = relays(value.relays);
   return urls ? { secret: value.secret, relays: urls } : null;
+}
+// A lone surrogate is not text (and is not valid UTF-8 on the wire); written out
+// by hand because String.prototype.isWellFormed needs Node 20 and engines says 18.
+const LONE_SURROGATE = /[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/;
+const VISIBLE = /[^\p{Default_Ignorable_Code_Point}\p{White_Space}]/u;
+/** The library's own sanitiser (R-6: the only one on this wire) strips and trims; the
+ * card then DROPS rather than truncates, and counts code points as that sanitiser does. */
+function cardName(value: unknown): string | null {
+  if (typeof value !== 'string' || LONE_SURROGATE.test(value)) return null;
+  const name = sanitizeWireText(value, CONTACT_CARD_NAME_MAX + 1);
+  const length = Array.from(name).length;
+  return length >= 1 && length <= CONTACT_CARD_NAME_MAX && VISIBLE.test(name) ? name : null;
+}
+// `server` is a base URL the receiver appends `/<hash>` to, so a query or any
+// fragment (even a bare `#`, which WHATWG reports as an empty hash) is refused.
+function cardServer(value: unknown): string | null {
+  if (typeof value !== 'string' || value.length > CONTACT_CARD_SERVER_MAX || value.includes('#') || value.includes('?')) return null;
+  try {
+    const url = new URL(value);
+    if (url.protocol !== 'https:' || url.username || url.password || url.hash || url.search
+      || url.href.length > CONTACT_CARD_SERVER_MAX) return null;
+    return url.href;
+  } catch { return null; }
+}
+function cardPhoto(value: unknown): ContactCardPhoto | null {
+  if (!object(value) || !hex(value.key) || !hex(value.hash)) return null;
+  const server = cardServer(value.server);
+  return server ? { key: value.key, server, hash: value.hash } : null;
+}
+const jsonBytes = (v: unknown): number => new TextEncoder().encode(JSON.stringify(v)).length;
+/** Lenient reader for a card as received. Never throws: an invalid `name` or
+ * `photo` is dropped on its own, unknown fields are dropped (and never counted,
+ * so a later card field cannot make this parser drop `name` or `photo`), and a
+ * card left with nothing valid, or whose NORMALISED known fields serialise to
+ * more than 1024 bytes of compact JSON, is `null`. A bad card never invalidates
+ * the message. */
+export function parseContactCard(value: unknown): ContactCard | null {
+  if (!object(value)) return null;
+  const card: ContactCard = {};
+  const name = value.name === undefined ? null : cardName(value.name);
+  if (name !== null) card.name = name;
+  const photo = value.photo === undefined ? null : cardPhoto(value.photo);
+  if (photo) card.photo = photo;
+  if (card.name === undefined && !card.photo) return null;
+  return jsonBytes(card) > CONTACT_CARD_MAX_BYTES ? null : card;
+}
+/** Strict form for senders: a bad card at create time is a caller bug. */
+function requireContactCard(value: ContactCard): ContactCard {
+  const card = parseContactCard(value);
+  const input = value as unknown as ObjectValue;
+  if (!card || (input.name !== undefined && card.name === undefined)
+    || (input.photo !== undefined && !card.photo)) throw new Error('Invalid contact card');
+  return card;
 }
 function decode(raw: string): unknown {
   if (typeof raw !== 'string' || new TextEncoder().encode(raw).length > CONTACT_MESSAGE_MAX_BYTES) return null;
@@ -110,10 +174,14 @@ export function parseContactExchangeMessage(raw: string): ContactExchangeMessage
     const reply = mailbox(v.reply);
     if (!reply || !hex(v.commitment) || !time(v.expiresAt) || v.expiresAt <= v.createdAt
       || v.expiresAt - v.createdAt > CONTACT_REQUEST_TTL) return null;
-    return { ...base, type: v.type, expiresAt: v.expiresAt, commitment: v.commitment, reply };
+    const card = parseContactCard(v.card);
+    return { ...base, type: v.type, expiresAt: v.expiresAt, commitment: v.commitment, reply, ...(card && { card }) };
   }
   if (!hex(v.requestHash) || !hex(v.nonce)) return null;
-  if (v.type === 'signet-contact-accept') return { ...base, type: v.type, requestHash: v.requestHash, nonce: v.nonce };
+  if (v.type === 'signet-contact-accept') {
+    const card = parseContactCard(v.card);
+    return { ...base, type: v.type, requestHash: v.requestHash, nonce: v.nonce, ...(card && { card }) };
+  }
   if (v.type === 'signet-contact-reveal' && hex(v.acceptanceHash)) {
     return { ...base, type: v.type, requestHash: v.requestHash, acceptanceHash: v.acceptanceHash, nonce: v.nonce };
   }
@@ -123,14 +191,18 @@ export function contactMessageHash(message: ContactExchangeMessage): string {
   const parsed = parseContactExchangeMessage(JSON.stringify(message));
   if (!parsed) throw new Error('Invalid contact exchange message');
   // Parser constructs allowlisted fields in a fixed order, independent of input ordering.
-  return digest('signet-contacts:message:v1', [parsed]);
+  // The card is presentation, not transcript: leaving it out keeps every hash identical
+  // to what a parser that has never heard of cards computes for the same message.
+  const { card: _card, ...transcript } = parsed as ContactRequest | ContactAcceptance;
+  return digest('signet-contacts:message:v1', [transcript]);
 }
 export function createContactRequest(args: { id: string; from: string; to: string; nonce: string;
-  reply: ContactMailbox; now: number; expiresAt?: number }): ContactRequest {
+  reply: ContactMailbox; now: number; expiresAt?: number; card?: ContactCard }): ContactRequest {
+  const card = args.card === undefined ? undefined : requireContactCard(args.card);
   const value = parseContactExchangeMessage(JSON.stringify({ v: 1, type: 'signet-contact-request',
     id: args.id, from: args.from, to: args.to, createdAt: args.now,
     expiresAt: args.expiresAt ?? args.now + CONTACT_REQUEST_TTL, reply: args.reply,
-    commitment: contactCommitment(args) }));
+    commitment: contactCommitment(args), ...(card && { card }) }));
   if (!value || value.type !== 'signet-contact-request') throw new Error('Invalid contact request');
   return value;
 }
@@ -140,11 +212,14 @@ function validRequest(request: ContactRequest, now: number): ContactRequest {
     || now < parsed.createdAt || now >= parsed.expiresAt) throw new Error('Contact request expired or not yet valid');
   return parsed;
 }
-export function createContactAcceptance(request: ContactRequest, nonce: string, now: number): ContactAcceptance {
+/** `card` describes the accepting side; the requester's card is never copied across. */
+export function createContactAcceptance(request: ContactRequest, nonce: string, now: number,
+  card?: ContactCard): ContactAcceptance {
   const parsed = validRequest(request, now);
   if (!hex(nonce)) throw new Error('Invalid acceptance nonce');
+  const own = card === undefined ? undefined : requireContactCard(card);
   return { v: 1, type: 'signet-contact-accept', id: parsed.id, from: parsed.to, to: parsed.from,
-    createdAt: now, requestHash: contactMessageHash(parsed), nonce };
+    createdAt: now, requestHash: contactMessageHash(parsed), nonce, ...(own && { card: own }) };
 }
 function validAcceptance(request: ContactRequest, acceptance: ContactAcceptance): void {
   const parsed = parseContactExchangeMessage(JSON.stringify(acceptance));

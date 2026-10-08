@@ -2,7 +2,7 @@ import { expect, it, vi } from 'vitest';
 import { finalizeEvent, getPublicKey } from 'nostr-tools/pure';
 import { nip44 } from 'nostr-tools';
 import { hexToBytes } from '@noble/hashes/utils.js';
-import { createContactRequest } from '../wire/invite.js';
+import { createContactRequest, createContactAcceptance } from '../wire/invite.js';
 import { wrapContactExchange, openContactMailboxWrap, openContactIdentityPacket } from './invite-nostr-tools.js';
 const a = hexToBytes('01'.repeat(32)), b = hexToBytes('02'.repeat(32)), c = hexToBytes('03'.repeat(32));
 function signer(key: Uint8Array) {
@@ -35,4 +35,20 @@ it('rejects malformed packets without asking the identity to decrypt', async () 
   const receiver = signer(b);
   expect(await openContactIdentityPacket({ v: 1, key: 'invalid', ciphertext: 'x' }, receiver)).toBeNull();
   expect(receiver.decrypt).not.toHaveBeenCalled();
+});
+it('carries a card inside the signed seal untouched, for a request and an acceptance', async () => {
+  const sender = signer(a), receiver = signer(b), secret = '04'.repeat(32);
+  const card = { name: 'Ada', photo: { key: '08'.repeat(32), server: 'https://blossom.example/', hash: '09'.repeat(32) } };
+  const request = createContactRequest({ id: '05'.repeat(16), from: sender.publicKey, to: receiver.publicKey,
+    nonce: '06'.repeat(32), reply: { secret: '07'.repeat(32), relays: ['wss://relay.example'] }, now: 1700000000, card });
+  const opened = await openContactIdentityPacket(openContactMailboxWrap(await wrapContactExchange(request, secret, sender), secret)!, receiver);
+  expect(opened).toEqual(request);
+  expect(opened && 'card' in opened ? opened.card : undefined).toEqual(card);
+  const acceptance = createContactAcceptance(request, '0a'.repeat(32), 1700000001, { name: 'Grace' });
+  const back = await openContactIdentityPacket(openContactMailboxWrap(await wrapContactExchange(acceptance, secret, receiver), secret)!, sender);
+  expect(back).toEqual(acceptance);
+  expect(back && 'card' in back ? back.card : undefined).toEqual({ name: 'Grace' });
+  // The card rides inside the seal's content, so the seal signature covers it.
+  const signed = receiver.signEvent.mock.calls[0]![0] as { content: string };
+  expect(JSON.parse(signed.content).card).toEqual({ name: 'Grace' });
 });

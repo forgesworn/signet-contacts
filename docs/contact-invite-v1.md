@@ -32,6 +32,8 @@ Hash encodings are SHA256 over UTF-8 JSON arrays (no spaces):
 - Commitment: [`signet-contacts:commit:v1`, id, requester, recipient, nonceA].
 - Message hash: [`signet-contacts:message:v1`, parsed message]. Parser field order
   is normative; unknown fields are dropped. Relay normalization above applies.
+  The optional `card` (below) is **excluded**: hash the parsed message with `card`
+  removed.
 - Word material: [`signet-contacts:words-material:v1`, requestHash, acceptanceHash,
   nonceA]. Reveal timestamp is deliberately excluded: choosing a later reveal
   time must not give the requester another attempt at matching words.
@@ -44,6 +46,68 @@ counter=0, words/count=3 with its default en-v1 2048-word list. Local role is
 Applications must pin the first accepted request and acceptance hashes before
 revealing nonceA. A second acceptance is not a retry if its hash changed. Transport
 signature verification and recipient checks are mandatory before state changes.
+
+## Contact card (optional, additive)
+
+A request or an acceptance may carry `card`, a self-declared name and a pointer
+to a photo the sender chooses to share. It is never on the reveal.
+
+```
+card?: { name?: string; photo?: { key: string; server: string; hash: string } }
+```
+
+- `name`: strip with the wire's one sanitiser (`sanitizeWireText`, `src/wire/ids.ts`):
+  remove U+0000–U+001F, U+007F–U+009F, U+200B–U+200F, U+2028–U+202E and
+  U+2066–U+2069 (so line breaks and zero-width characters are removed, not kept:
+  `Mum\nDad` becomes `MumDad`), then trim (ECMAScript `String.prototype.trim`: the
+  WhiteSpace and LineTerminator sets, including U+FEFF, U+00A0 and U+3000). Then the
+  card **drops rather than truncates**: the name must be 1–100 **code points**
+  (counted as the sanitiser counts, so an astral character is one), must contain
+  at least one character that is neither `Default_Ignorable_Code_Point` nor
+  `White_Space`, and must contain no lone surrogate (checked on the input, before
+  stripping). Otherwise drop `name`.
+- `photo.key` and `photo.hash`: exactly 64 lowercase hex. `key` decrypts the blob
+  whose SHA-256 is `hash`.
+- `photo.server`: a URL that parses, is `https:`, has no username, password or
+  fragment (a bare `#` counts), **and no query (a bare `?` counts)**, and is at
+  most 512 characters. It is stored as the WHATWG URL serialisation (`href`),
+  which must also fit in 512 characters. It is a base URL: the blob is fetched
+  from `<server without its trailing slashes>/<hash>`.
+- Parsing is a strict allowlist: unknown card and photo fields are dropped and
+  **never counted**, so a later card field cannot make a parser drop `name` or
+  `photo`. An invalid `photo` drops `photo` only; a card left with no valid field
+  is dropped. The one size bound applies to the normalised card, known fields
+  only: serialise `{"name":…,"photo":{"key":…,"server":…,"hash":…}}` (that key
+  order, present fields only, no whitespace) as UTF-8 JSON; more than 1024 bytes
+  drops the whole card. **An invalid card never invalidates the message.**
+- `createContactRequest({ …, card })` and `createContactAcceptance(request, nonce,
+  now, card)` validate on create and throw `Invalid contact card`: a bad card from
+  your own code is a bug, not input. An acceptance never inherits the requester's
+  card.
+
+**The card is not part of any hash.** It is excluded from `contactMessageHash`,
+and therefore from `requestHash`, `acceptanceHash`, the commitment and the
+verification words. A message with a card hashes identically to the same message
+without one. That is what keeps older parsers, which drop the field, in agreement
+on every hash: mixed versions still complete exchanges, they simply do not get the
+card.
+
+**Authenticity** comes from the persona-signed kind-13 seal that carries the
+message, not from the card or the transcript. The adapter verifies the seal and
+requires `message.from` to equal the seal signer, and `message.to` to equal the
+decrypting identity. Treat the name as self-declared: anyone holding the invite
+can claim any name.
+
+**First card wins.** A message is identified by its hash, which the card is not
+part of, so a second copy of the same request or acceptance with a different card
+is the same message and the first card stays (the state machine keeps the first).
+To resend, send the stored message again; never re-create it with a new card.
+
+**Fetching the photo.** Do not fetch `photo.server` before the user has accepted
+the exchange. The library does not check the host: an application MUST refuse IP
+literals and loopback, private, link-local and single-label hosts before any
+fetch, and re-check after DNS resolution where it can, because the sender chose
+the server. Vectors: `vectors/contact-card-v1.json`.
 
 ## Encrypted transport
 
