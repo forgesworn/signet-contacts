@@ -53,7 +53,7 @@ A request or an acceptance may carry `card`, a self-declared name and a pointer
 to a photo the sender chooses to share. It is never on the reveal.
 
 ```
-card?: { name?: string; photo?: { key: string; server: string; hash: string } }
+card?: { name?: string; photo?: { key: string; server: string; hash: string }; blur?: true }
 ```
 
 - `name`: strip with the wire's one sanitiser (`sanitizeWireText`, `src/wire/ids.ts`):
@@ -73,11 +73,20 @@ card?: { name?: string; photo?: { key: string; server: string; hash: string } }
   most 512 characters. It is stored as the WHATWG URL serialisation (`href`),
   which must also fit in 512 characters. It is a base URL: the blob is fetched
   from `<server without its trailing slashes>/<hash>`.
+- `blur`: absent or exactly the boolean `true` (added in 0.3.0). The sender asks the
+  receiver's app to hide the sender's name and picture on screen until the receiver
+  taps to show them. A display request, not enforcement; a parser older than 0.3.0
+  drops it, which degrades to "not blurred". Any other value (`false`, `"true"`, `1`)
+  is dropped on its own without touching `name` or `photo`, a card whose only valid
+  field is `blur` is dropped (nothing to show), and `blur` counts toward the
+  1024-byte bound (serialised last, as `"blur":true`). Senders never emit `blur:
+  false`; a create-time `blur` other than `true` throws `Invalid contact card`.
+  Vectors: `vectors/contact-card-blur-v1.json`.
 - Parsing is a strict allowlist: unknown card and photo fields are dropped and
   **never counted**, so a later card field cannot make a parser drop `name` or
   `photo`. An invalid `photo` drops `photo` only; a card left with no valid field
   is dropped. The one size bound applies to the normalised card, known fields
-  only: serialise `{"name":…,"photo":{"key":…,"server":…,"hash":…}}` (that key
+  only: serialise `{"name":…,"photo":{"key":…,"server":…,"hash":…},"blur":true}` (that key
   order, present fields only, no whitespace) as UTF-8 JSON; more than 1024 bytes
   drops the whole card. **An invalid card never invalidates the message.**
 - `createContactRequest({ …, card })` and `createContactAcceptance(request, nonce,

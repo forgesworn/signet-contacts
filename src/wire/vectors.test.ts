@@ -8,7 +8,7 @@ import { ackTag, projectionTag, proposalTag, scopedContactId, sanitizeWireText }
 import { pairingCode } from './pairing-code.js';
 import { MAX_DISPLAY_NAME } from './constants.js';
 import { createContactRequest, createContactAcceptance, createContactReveal, contactMessageHash,
-  contactCommitment, parseContactCard, parseContactExchangeMessage } from './invite.js';
+  contactCommitment, parseContactCard, parseContactExchangeMessage, CONTACT_CARD_MAX_BYTES } from './invite.js';
 import type { ContactCard } from './invite.js';
 import type { ContactProjectionV2, ContactProposalV1, PairingAckV2 } from './types.js';
 import { sealVaultPayload, openVaultPayload } from './envelope.js';
@@ -468,6 +468,55 @@ describe('vectors', () => {
     frozen('vectors/contact-card-v1.json', out);
   });
 
+  it('freezes the contact card blur flag: only the boolean true survives, and it is outside every hash', () => {
+    const from = '1'.repeat(64), to = '2'.repeat(64), nonce = '3'.repeat(64);
+    const id = '4'.repeat(32), reply = { secret: '5'.repeat(64), relays: ['wss://relay.example'] };
+    const photo = { key: '8'.repeat(64), server: 'https://blossom.example/', hash: '9'.repeat(64) };
+    const blurred: ContactCard = { name: 'Ada Lovelace', photo, blur: true };
+    const plainRequest = createContactRequest({ id, from, to, nonce, reply, now: NOW });
+    const request = createContactRequest({ id, from, to, nonce, reply, now: NOW, card: blurred });
+    const acceptance = createContactAcceptance(request, '6'.repeat(64), NOW + 1, { name: 'Grace Hopper', blur: true });
+    expect(request.card).toEqual(blurred);
+    expect(contactMessageHash(request)).toBe(contactMessageHash(plainRequest));
+    // Largest server path that keeps the card at or under the 1024-byte cap WITHOUT blur.
+    const sized = (extra: Record<string, unknown>) => {
+      const make = (n: number) => ({ name: '\u{1F600}'.repeat(100), photo: { ...photo, server: `https://blossom.example/${'a'.repeat(n)}` } });
+      const bytes = (v: unknown) => new TextEncoder().encode(JSON.stringify(v)).length;
+      let path = 0;
+      while (bytes(make(path + 1)) <= CONTACT_CARD_MAX_BYTES) path++;
+      return { ...make(path), ...extra };
+    };
+    const cardCases: Array<[string, unknown]> = [
+      ['blur true is kept with name and photo', blurred],
+      ['blur true is kept with name only', { name: 'Ada', blur: true }],
+      ['blur true is kept with photo only', { photo, blur: true }],
+      ['blur false is dropped, the rest survives', { name: 'Ada', photo, blur: false }],
+      ['blur "true" (a string) is dropped, the rest survives', { name: 'Ada', photo, blur: 'true' }],
+      ['blur 1 is dropped, the rest survives', { name: 'Ada', photo, blur: 1 }],
+      ['blur null is dropped, the rest survives', { name: 'Ada', blur: null }],
+      ['blur as an object is dropped, the rest survives', { name: 'Ada', blur: { value: true } }],
+      ['a card whose only field is blur true is dropped', { blur: true }],
+      ['a card whose only field is blur false is dropped', { blur: false }],
+      ['an invalid name with blur true leaves nothing to show, so the card is dropped', { name: '', blur: true }],
+      ['blur counts toward the 1024-byte cap: at the cap without blur the card is kept', sized({})],
+      ['blur counts toward the 1024-byte cap: the same card with blur true is dropped', sized({ blur: true })],
+    ];
+    const messageCases: Array<[string, string]> = [
+      ['request with a blurred card', JSON.stringify(request)],
+      ['request with blur false still parses, without blur', JSON.stringify({ ...request, card: { ...blurred, blur: false } })],
+      ['acceptance with a blurred card', JSON.stringify(acceptance)],
+    ];
+    const out = {
+      note: 'Public deterministic test material. blur is a display request on the card: kept only when exactly the boolean true, outside contactMessageHash, and a card whose only valid field is blur is still null.',
+      from, to, nonce, id,
+      requestHash: contactMessageHash(request),
+      requestHashWithoutCard: contactMessageHash(plainRequest),
+      cardCases: cardCases.map(([name, input]) => ({ name, input, expected: parseContactCard(input) })),
+      messageCases: messageCases.map(([name, raw]) => ({ name, raw, expected: parseContactExchangeMessage(raw) })),
+    };
+    frozen('vectors/contact-card-blur-v1.json', out);
+  });
+
   // Fix round 1. Runs after every `frozen()` call above has written its file
   // for this test run (vitest runs `it`s within one `describe` in declaration
   // order), and reads the files back as raw BYTES rather than a decoded
@@ -481,6 +530,7 @@ describe('vectors', () => {
       'vectors/envelope.v2.json',
       'vectors/pairing-code.json',
       'vectors/contact-card-v1.json',
+      'vectors/contact-card-blur-v1.json',
     ];
     for (const path of files) {
       const bytes = readFileSync(path);
