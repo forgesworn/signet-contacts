@@ -128,3 +128,53 @@ it('throws on an invalid card at create time', () => {
     expect(() => createContactAcceptance(request, '6'.repeat(64), request.createdAt + 1, bad)).toThrow('Invalid contact card');
   }
 });
+it('keeps blur only when it is exactly the boolean true, and never lets it stand alone', () => {
+  expect(parseContactCard({ ...card, blur: true })).toEqual({ ...card, blur: true });
+  expect(parseContactCard({ name: 'Ada', blur: true })).toEqual({ name: 'Ada', blur: true });
+  for (const bad of [false, 'true', 1, 0, null, [], {}, [true]]) {
+    expect(parseContactCard({ ...card, blur: bad }), JSON.stringify(bad)).toEqual(card);
+    expect('blur' in parseContactCard({ name: 'Ada', blur: bad })!).toBe(false);
+  }
+  expect(parseContactCard({ blur: true })).toBeNull();
+  expect(parseContactCard({ name: '', blur: true })).toBeNull();
+  expect(parseContactCard(parseContactCard({ ...card, blur: true }))).toEqual({ ...card, blur: true });
+});
+it('counts blur toward the 1024-byte card cap', () => {
+  const bytes = (v: unknown) => new TextEncoder().encode(JSON.stringify(v)).length;
+  const make = (n: number) => ({ name: '\u{1F600}'.repeat(100), photo: { ...card.photo, server: `https://blossom.example/${'a'.repeat(n)}` } });
+  let n = 0;
+  while (bytes(make(n + 1)) <= 1024) n++;
+  expect(bytes(make(n))).toBeLessThanOrEqual(1024);
+  expect(parseContactCard(make(n))).toEqual(make(n));
+  expect(parseContactCard({ ...make(n), blur: true })).toBeNull();
+});
+it('carries blur on request and acceptance, rejects a bad blur at create time, and never emits blur false', () => {
+  const request = createContactRequest({ ...reqArgs, card: { ...card, blur: true } });
+  expect(request.card).toEqual({ ...card, blur: true });
+  expect(parseContactExchangeMessage(JSON.stringify(request))).toEqual(request);
+  const acceptance = createContactAcceptance(request, '6'.repeat(64), request.createdAt + 1, { name: 'Grace', blur: true });
+  expect(acceptance.card).toEqual({ name: 'Grace', blur: true });
+  expect(createContactAcceptance(request, '6'.repeat(64), request.createdAt + 1, { name: 'Grace' }).card).toEqual({ name: 'Grace' });
+  // An undefined blur is absent, and absent is never serialised as false.
+  const absent = createContactRequest({ ...reqArgs, card: { ...card, blur: undefined } });
+  expect('blur' in absent.card!).toBe(false);
+  for (const bad of [false, 'true', 1, null] as unknown as true[]) {
+    expect(() => createContactRequest({ ...reqArgs, card: { ...card, blur: bad } }), String(bad)).toThrow('Invalid contact card');
+    expect(() => createContactAcceptance(request, '6'.repeat(64), request.createdAt + 1, { name: 'Grace', blur: bad })).toThrow('Invalid contact card');
+  }
+  expect(() => createContactRequest({ ...reqArgs, card: { blur: true } })).toThrow('Invalid contact card');
+  // A bad blur on a received message drops only the blur.
+  const lenient = parseContactExchangeMessage(JSON.stringify({ ...request, card: { ...card, blur: 'yes' } })) as typeof request;
+  expect(lenient.card).toEqual(card);
+});
+it('hashes messages that differ only in card.blur identically, and keeps blur off the reveal', () => {
+  const plain = createContactRequest({ ...reqArgs, card });
+  const blurred = createContactRequest({ ...reqArgs, card: { ...card, blur: true } });
+  expect(contactMessageHash(blurred)).toBe(contactMessageHash(plain));
+  expect(blurred.commitment).toBe(plain.commitment);
+  const a1 = createContactAcceptance(plain, '6'.repeat(64), plain.createdAt + 1, { name: 'Grace' });
+  const a2 = createContactAcceptance(plain, '6'.repeat(64), plain.createdAt + 1, { name: 'Grace', blur: true });
+  expect(contactMessageHash(a2)).toBe(contactMessageHash(a1));
+  const reveal = createContactReveal(plain, a1, nonce, plain.createdAt + 2);
+  expect('card' in parseContactExchangeMessage(JSON.stringify({ ...reveal, card: { ...card, blur: true } }))!).toBe(false);
+});

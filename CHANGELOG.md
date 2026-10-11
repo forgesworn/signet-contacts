@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- **Feature (wire, additive): an optional `blur` on the contact card.**
+  `card: { name?, photo?, blur?: true }`. `blur: true` is the sender asking the
+  receiver's app to hide the sender's name and picture on screen until the
+  receiver taps to show them. A display request, not enforcement; a parser older
+  than this version drops the field, so it degrades to "not blurred". The lenient
+  `parseContactCard` keeps `blur` only when it is exactly the boolean `true` and
+  drops any other value without touching `name` or `photo`; a card whose only
+  valid field is `blur` is still `null`; `blur` counts toward the 1024-byte
+  bound. Senders (`createContactRequest`, `createContactAcceptance`) throw
+  `Invalid contact card` on any `blur` other than `true` and never emit `blur:
+  false`. The card stays outside `contactMessageHash` and off the reveal, so
+  every hash is unchanged. `vectors/contact-card-v1.json` is untouched;
+  `vectors/contact-card-blur-v1.json` is new. Package version 0.3.0.
+
 - **Feature (wire, additive): an optional `card` on contact requests and
   acceptances.** A request or an acceptance may carry
   `card: { name?, photo?: { key, server, hash } }`, a self-declared name and a

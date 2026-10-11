@@ -30,8 +30,11 @@ export interface ContactInvite extends ContactMailbox {
  * Blossom `server`. Never fetched before the exchange completes. */
 export interface ContactCardPhoto { key: string; server: string; hash: string }
 /** Optional, self-declared presentation. Authentic only via the persona-signed
- * seal, never part of any transcript hash, and dropped by older parsers. */
-export interface ContactCard { name?: string; photo?: ContactCardPhoto }
+ * seal, never part of any transcript hash, and dropped by older parsers.
+ * `blur: true` asks the receiver's app to hide the sender's name and picture on
+ * screen until the receiver taps to show them. A display request, not
+ * enforcement; a parser older than 0.3.0 drops it, so it degrades to "not blurred". */
+export interface ContactCard { name?: string; photo?: ContactCardPhoto; blur?: true }
 export interface ContactRequest {
   v: 1; type: 'signet-contact-request'; id: string; from: string; to: string;
   createdAt: number; expiresAt: number; commitment: string; reply: ContactMailbox;
@@ -96,8 +99,8 @@ function cardPhoto(value: unknown): ContactCardPhoto | null {
   return server ? { key: value.key, server, hash: value.hash } : null;
 }
 const jsonBytes = (v: unknown): number => new TextEncoder().encode(JSON.stringify(v)).length;
-/** Lenient reader for a card as received. Never throws: an invalid `name` or
- * `photo` is dropped on its own, unknown fields are dropped (and never counted,
+/** Lenient reader for a card as received. Never throws: an invalid `name`,
+ * `photo` or `blur` (anything but exactly `true`) is dropped on its own, unknown fields are dropped (and never counted,
  * so a later card field cannot make this parser drop `name` or `photo`), and a
  * card left with nothing valid, or whose NORMALISED known fields serialise to
  * more than 1024 bytes of compact JSON, is `null`. A bad card never invalidates
@@ -110,6 +113,9 @@ export function parseContactCard(value: unknown): ContactCard | null {
   const photo = value.photo === undefined ? null : cardPhoto(value.photo);
   if (photo) card.photo = photo;
   if (card.name === undefined && !card.photo) return null;
+  // Only the boolean `true` counts; any other value is dropped on its own. A card
+  // whose only valid field is `blur` has nothing to show, so it stays `null` above.
+  if (value.blur === true) card.blur = true;
   return jsonBytes(card) > CONTACT_CARD_MAX_BYTES ? null : card;
 }
 /** Strict form for senders: a bad card at create time is a caller bug. */
@@ -117,7 +123,8 @@ function requireContactCard(value: ContactCard): ContactCard {
   const card = parseContactCard(value);
   const input = value as unknown as ObjectValue;
   if (!card || (input.name !== undefined && card.name === undefined)
-    || (input.photo !== undefined && !card.photo)) throw new Error('Invalid contact card');
+    || (input.photo !== undefined && !card.photo)
+    || (input.blur !== undefined && input.blur !== true)) throw new Error('Invalid contact card');
   return card;
 }
 function decode(raw: string): unknown {
