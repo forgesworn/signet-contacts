@@ -1,0 +1,39 @@
+# @forgesworn/signet-contacts
+
+> The v2 wire for application access to Signet contacts: a capability-scoped pairing, a per-grant encrypted projection the owner controls, and a small proposal channel for an app to ask (never demand) for a contact to be added or relabelled. A consumer SDK in TypeScript: it runs inside the app that wants a slice of somebody's contacts, once that person has granted it. The signer, the relay and the storage are all injected; it opens no socket and holds no key.
+
+The package is ESM only, for Node 18 or newer and browsers (it reads the global Web Crypto object). There are no published releases yet: install from git, pinned to a commit.
+
+## Install
+
+- `npm install git+https://github.com/forgesworn/signet-contacts.git#<sha>` with `<sha>` a specific commit, not a branch.
+- `npm install nostr-tools` as well if you use the bundled adapters or the local-key signer. `nostr-tools` (`^2.23.9`) is an optional peer dependency.
+
+## Imports
+
+- `@forgesworn/signet-contacts`: `createSignetContactsClient`, `createMemoryStorage`, `createAppInviteClient`, the `ContactsSigner`, `RelayIo` and `StorageIo` types, and everything in `./wire`.
+- `@forgesworn/signet-contacts/wire`: the wire layer alone (constants, `CAPABILITIES`, pairing, ack, envelope, projection, proposal and invite builders and parsers, `applyProjection`, `blockedSetOf`, `isFresh`, `pairingCode`, `randomHex`, types). No client.
+- `@forgesworn/signet-contacts/adapters/nostr-tools`: `createSimplePoolRelayIo(pool, { timeoutMs })`, a `RelayIo` over a nostr-tools `SimplePool`.
+- `@forgesworn/signet-contacts/adapters/invite-nostr-tools`: `wrapContactExchange`, `openContactMailboxWrap`, `openContactIdentityPacket`. Imports `nostr-tools`.
+- `@forgesworn/signet-contacts/vectors/*`: the frozen JSON test vectors, for ports to other languages.
+
+## The client
+
+`createSignetContactsClient({ signer, relay, storage? })` returns `buildPairingUri`, `parsePairingUri`, `awaitPairingAck`, `load`, `fetchProjection`, `getState`, `getBlockedSet`, `isFresh`, `propose`, `pendingProposals`, `onRevoked`, `start` and `stop`. `start(pairing)` returns a `() => void` teardown; `onRevoked(cb)` is a separate method that returns a function removing the listener. `storage` defaults to in-memory, which loses the Blocked set on restart, so pass a persistent `StorageIo`. Full signatures are in the README's API reference.
+
+## Rules that must not be broken
+
+- Never un-block anyone because a projection expired or the grant was revoked. `getBlockedSet()` is sticky and ignores both. Freshness (`isFresh`) is a display hint, not a permission check.
+- Revocation is not recall: honour a revocation by clearing the directory and keeping the Blocked set.
+- Kin means close circle, not family.
+- Call `client.load(pairing.grantId)` before `client.fetchProjection(pairing)` on a later launch.
+- Show the pairing verification code and have the person confirm it in Signet before trusting a new pairing.
+
+## Docs
+
+- [README](README.md): quick start, storage, options and defaults, proposals, capabilities, entry points, API reference.
+- [Wire specification](docs/WIRE.md): event kinds, tag derivations, JSON shapes, the capability table (section 6), limits and vectors. Language-neutral.
+- [Integration guide](docs/INTEGRATION.md): a worked integration, step by step.
+- [Contact invite v1](docs/contact-invite-v1.md) and [channel check v1](docs/channel-check-v1.md): the invite and check profiles.
+- [Security](SECURITY.md): the threat model.
+- [Changelog](CHANGELOG.md): dated wire changes, including breaking ones.

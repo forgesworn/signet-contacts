@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- **Docs: the README now states the API it shows.** Adds the `ContactsSigner`
+  interface and a runnable local-key signer, a "Proposing a change" section for
+  `client.propose`, an API reference with return types and the `PairingV2`,
+  `RelayIo` and `StorageIo` shapes, the capability table and the allowed
+  `directory` values (`'owner'` and `'dependant'`), the package entry points, the
+  supported runtimes, a Node `StorageIo` beside the browser-only one, and the
+  `nostr-tools` peer dependency install line. Adds `llms.txt` (shipped in the
+  package) and `AGENTS.md`. No code or wire change.
+
 - **Feature (wire, additive): an optional `blur` on the contact card.**
   `card: { name?, photo?, blur?: true }`. `blur: true` is the sender asking the
   receiver's app to hide the sender's name and picture on screen until the
