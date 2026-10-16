@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- **Docs and metadata: the Node floor is now stated as 22.** `engines.node` was
+  `>=18`, but the runtime dependency `spoken-token` 2.1.0 declares `>=22`, the
+  source reads the global Web Crypto object (`crypto.subtle` and
+  `crypto.getRandomValues`), which Node 18 only exposes behind
+  `--experimental-global-webcrypto`, and CI tests Node 22 only. `engines.node`
+  is now `>=22`, and the README and `llms.txt` say so. No code or wire change.
+
 - **Docs: the README now states the API it shows.** Adds the `ContactsSigner`
   interface and a runnable local-key signer, a "Proposing a change" section for
   `client.propose`, an API reference with return types and the `PairingV2`,
