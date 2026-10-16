@@ -51,11 +51,13 @@ its own relay client and signer can leave `nostr-tools` out entirely.
 
 ## Runtimes
 
-The package is ESM only and runs in Node or a browser. `engines` says Node 18
-or newer, and CI runs Node 22. It reads the global Web Crypto object
-(`crypto.subtle` and `crypto.getRandomValues`), so the runtime must provide it
-as a global. It opens no socket and holds no key of its own: the signer, the relay and the
-storage are all injected. The quick start's `localStorage` storage is
+The package is ESM only and runs in Node or a browser. `engines` says Node 22
+or newer, which is the floor set by its `spoken-token` dependency, and CI runs
+Node 22. It reads the global Web Crypto object (`crypto.subtle` and
+`crypto.getRandomValues`), so the runtime must provide it as a global; Node 22
+does, and Node 18 does not without `--experimental-global-webcrypto`. It opens
+no socket and holds no key of its own: the signer, the relay and the storage are
+all injected. The quick start's `localStorage` storage is
 **browser-only**; on Node use a file or database store, such as the one in
 "Storage, and the sticky Blocked set".
 

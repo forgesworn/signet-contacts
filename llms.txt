@@ -2,7 +2,7 @@
 
 > The v2 wire for application access to Signet contacts: a capability-scoped pairing, a per-grant encrypted projection the owner controls, and a small proposal channel for an app to ask (never demand) for a contact to be added or relabelled. A consumer SDK in TypeScript: it runs inside the app that wants a slice of somebody's contacts, once that person has granted it. The signer, the relay and the storage are all injected; it opens no socket and holds no key.
 
-The package is ESM only, for Node 18 or newer and browsers (it reads the global Web Crypto object). There are no published releases yet: install from git, pinned to a commit.
+The package is ESM only, for Node 22 or newer and browsers (it reads the global Web Crypto object). There are no published releases yet: install from git, pinned to a commit.
 
 ## Install
 
