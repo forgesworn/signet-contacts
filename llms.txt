@@ -4,6 +4,14 @@
 
 The package is ESM only, for Node 22 or newer and browsers (it reads the global Web Crypto object). There are no published releases yet: install from git, pinned to a commit.
 
+## ForgeSworn ecosystem
+
+- [ForgeSworn library guide](https://forgesworn.dev/llms.txt): Find related libraries, tools and integration guides by task and runtime.
+- [ForgeSworn on GitHub](https://github.com/forgesworn): Browse the organisation’s public repositories.
+- [Project source](https://github.com/forgesworn/signet-contacts): Canonical source repository, documentation and release information.
+- [signet-contacts-kotlin](https://github.com/forgesworn/signet-contacts-kotlin): Kotlin implementation of the v2 wire.
+- [signet-contacts-rs](https://github.com/forgesworn/signet-contacts-rs): Rust consumer implementation of the v2 wire.
+
 ## Install
 
 - `npm install git+https://github.com/forgesworn/signet-contacts.git#<sha>` with `<sha>` a specific commit, not a branch.
